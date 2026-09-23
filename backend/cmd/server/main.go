@@ -32,5 +32,7 @@ func main() {
 	}
 
 	log.Printf("server listening on %s", server.Addr)
-	log.Fatal(server.ListenAndServe())
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatalf("server failed: %v", err)
+	}
 }
