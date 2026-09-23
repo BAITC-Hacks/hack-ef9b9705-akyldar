@@ -1,0 +1,30 @@
+{
+  "type": "object",
+  "properties": {
+    "title": { "type": "string" },
+    "context": { "type": "string" },
+    "need": { "type": "string" },
+    "users": { "type": "string" },
+    "data": { "type": "string" },
+    "constraints": { "type": "string" },
+    "expected_result": { "type": "string" },
+    "success_criteria": { "type": "string" },
+    "contact": { "type": "string" },
+    "interaction_format": { "type": "string" },
+    "topic": { "type": "string" }
+  },
+  "required": [
+    "title",
+    "context",
+    "need",
+    "users",
+    "data",
+    "constraints",
+    "expected_result",
+    "success_criteria",
+    "contact",
+    "interaction_format",
+    "topic"
+  ],
+  "additionalProperties": false
+}
