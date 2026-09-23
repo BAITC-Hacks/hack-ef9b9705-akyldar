@@ -1,0 +1,85 @@
+{
+  "synthetic": true,
+  "items": [
+    {
+      "id": 1,
+      "name": "ByteBuilders Demo",
+      "interests": [
+        "AI",
+        "Logistics"
+      ],
+      "skills": [
+        "Go",
+        "React"
+      ],
+      "technologies": [
+        "OpenAI API",
+        "PostgreSQL"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "StudyFlow Demo",
+      "interests": [
+        "Education",
+        "Scheduling"
+      ],
+      "skills": [
+        "Go",
+        "TypeScript"
+      ],
+      "technologies": [
+        "React",
+        "SQLite"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "ShelfCheck Demo",
+      "interests": [
+        "Retail",
+        "Data validation"
+      ],
+      "skills": [
+        "Go",
+        "CSV processing"
+      ],
+      "technologies": [
+        "HTML",
+        "CSS"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "OfficeSlots Demo",
+      "interests": [
+        "Healthcare administration",
+        "Scheduling"
+      ],
+      "skills": [
+        "Go",
+        "UX design"
+      ],
+      "technologies": [
+        "React",
+        "PostgreSQL"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "ClearNumbers Demo",
+      "interests": [
+        "Analytics",
+        "Data visualization"
+      ],
+      "skills": [
+        "Go",
+        "SQL"
+      ],
+      "technologies": [
+        "React",
+        "SQLite"
+      ]
+    }
+  ]
+}
