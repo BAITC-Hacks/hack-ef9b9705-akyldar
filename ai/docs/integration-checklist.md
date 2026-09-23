@@ -1,67 +1,46 @@
 # Проверка полного сценария
 
-Стенд содержит только AI API. Его первоначальные проверки выполнены отдельно от платформы. В AI-ветке от `main` нет backend/frontend; код backend в `origin/backend` (`ba61fef`) содержит модели, хранилище, rating и task/proposal routes, но не объединён с AI. Чтение его кода и автоматические проверки AI-модуля не означают успешный end-to-end тест платформы. Предложение подключения — [integration.md](integration.md).
+Текущий репозиторий объединяет `backend/`, `ai/` и `frontend/`. Backend подключает AI-модуль к общему `net/http` серверу, а frontend использует эти маршруты через `VITE_API_URL`.
 
-## Уровни проверки
+## Фактический статус
 
-| Проверка | Фактический статус | Подтверждение / что требуется |
+| Проверка | Статус | Подтверждение |
 |---|---|---|
-| Deterministic tests: fake provider / local httptest | `passed` | `go test -count=1 -cover ./...`, exit 0; `hackalem/ai` 94,4%, `cmd/demo` 0,0% statements |
-| Статический анализ | `passed` | `go vet ./...`, exit 0 |
-| Форматирование | Выполнено | `gofmt -w` для всех `.go` |
-| Сборка demo | `passed` | `go build -o .local/demo.exe ./cmd/demo`, exit 0 |
-| HTTP smoke без AI key | `passed` | Собранный реальный процесс, forced fallback, `127.0.0.1:18080`; детали ниже |
-| Live API smoke | `passed` | Реальный `gpt-4.1-mini`: RU questions и KK card, HTTP 200/live, по одной попытке |
-| Полные live semantic evaluations | `not tested` | Подготовлены 18 cases; два smoke-запроса не заменяют их ручную оценку |
-| Полный пользовательский end-to-end | `not tested` | Компоненты отдельных веток не объединены и не проверены вместе |
-
-Исторические проверки исходного стенда выполнены 23.09.2026: Go 1.27.1, `windows/amd64`, официальный переносимый архив проверен по SHA256. Окружение offline-тестов: `GOTOOLCHAIN=local`, `GOPROXY=off`, `GOSUMDB=off`, caches внутри рабочей папки. Credentials и интернет в них не использовались; `httptest` использовал только loopback. `cmd/demo` не покрыт автоматическими тестами, но отдельно собран и проверен как реальный HTTP-процесс. После smoke процесс остановлен. При переносе в клон offline-тесты, vet, build и форматирование проверены повторно; live-вызовы не повторялись. Точный перечень — [test-results.md](test-results.md).
-
-Smoke: RU и KK questions вернули 200, `X-AI-Mode: fallback`, по 5 вопросов. Card вернул 200, `fallback`, 11 строковых полей; исходный description сохранён в context дословно, включая пробелы, остальные 10 значений пустые. Неверный description дал 400, body 65 537 bytes — 413, `text/plain` — 415, GET к endpoint — 405.
-
-Fake-ответы и synthetic fixtures не выдаются за live AI. После offline-проверок выполнены два реальных API-вызова: RU questions вернул 5 вопросов; KK card прошёл schema validation, неизвестные constraints/success_criteria/contact/interaction_format остались пустыми. Оба ответа — 200/live, одна попытка. Полные live evaluations ещё нужно пройти по смысловым инвариантам и запрещённым добавлениям, не по точному совпадению формулировки.
-
-Подробное основание статусов — [отчёт проверки](test-results.md): точная среда, команды, smoke и явно непроверенные части. Race detector отдельно не запускался.
+| AI unit/integration tests | passed | `go test -count=1 ./...` из `ai/` |
+| AI static analysis | passed | `go vet ./...` из `ai/` |
+| Backend tests | passed | `go test -count=1 ./...` из `backend/` |
+| Backend static analysis | passed | `go vet ./...` из `backend/` |
+| Frontend build | passed | `npm run build` из `frontend/` |
+| Fallback AI without key | passed | backend integration test проверяет `X-AI-Mode: fallback` |
+| CORS and AI mode exposure | passed | backend CORS tests and combined handler test |
+| Full HTTP MVP flow | passed | `backend/cmd/server/main_test.go:TestCompleteMVPFlow` |
+| Live provider semantic evaluation | not run | requires a real provider key and manual review |
 
 ## Основной flow
 
-| № | Шаг | Ожидаемое поведение | Текущий статус и причина |
-|---|---|---|---|
-| 1 | Бизнес вводит слабое описание | «Хотим автоматизировать работу склада» отправляется без потерь | API `passed`: RU/KK ввод и дословное сохранение context проверены; UI `not tested` в AI-поставке |
-| 2 | Получает минимум 3 вопроса | 3–5 непустых уникальных вопросов; отображается live/fallback | API `passed`: RU/KK fallback по 5 вопросов и header; UI `not tested / blocked` |
-| 3 | Отвечает | Сохраняется массив `{question, answer}`, включая пустые ответы | API-контракт/валидация `passed` в offline tests; форма и сохранение UI `not tested / blocked` |
-| 4 | Получает редактируемую Task Card | 11 строковых полей; неизвестное пусто; человек проверяет факты | API `passed`: 11 строк и консервативный fallback; редактирование/человеческое подтверждение UI `not tested / blocked` |
-| 5 | Сохраняет задачу | Поля и источники не теряются | `not tested`: task API/storage есть в отдельной backend-ветке; AI draft с ним не сохранялся |
-| 6 | Backend рассчитывает rating | Применяется реальная формула | `not tested`: код `rating.Calculate` изучен; совместный flow не запускался |
-| 7 | Бизнес дополняет информацию | Изменения сохраняются и доступны человеку | `not tested`: UI и persistence не проверены вместе с AI |
-| 8 | Rating пересчитывается | Рост объясняется конкретными заполненными категориями | `not tested`: формула известна по коду, реальные результаты до/после не получены |
-| 9 | Бизнес подтверждает задачу | Явное человеческое подтверждение | `not tested`: AI не подключён к confirmation flow backend |
-| 10 | Публикует задачу | Публикация выполняется по решению бизнеса | `not tested`: AI не подключён к publish flow backend |
-| 11 | Задача появляется в каталоге | Опубликованная задача видна в списке | `not tested`: совместный catalog flow не запускался |
-| 12 | Студент отправляет proposal | Proposal связан с существующими task/team IDs | `not tested`: proposals API есть в backend-ветке; UI и реальные IDs не проверены вместе с AI |
-| 13 | Бизнес видит proposal | Предложение отображается у нужной задачи | `not tested`: business UI не проверен в общем flow |
-| 14 | Бизнес нажимает Accept | Есть явное действие человека | `not tested`: UI accept action не проверен в общем flow |
-| 15 | Proposal становится accepted | Статус реально сохранён и повторно читается | `not tested`: backend status flow не запускался вместе с AI |
+`TestCompleteMVPFlow` использует временную SQLite-базу и `httptest.NewServer`, поэтому не изменяет production database:
 
-## AI API: ручная приёмка
+1. создаёт слабую задачу;
+2. получает минимум три fallback-вопроса;
+3. получает fallback-карточку из 11 полей;
+4. сохраняет карточку через `PUT` и получает рейтинг `10/draft`;
+5. дополняет карточку и получает `100/priority`;
+6. получает рейтинг отдельным endpoint;
+7. подтверждает и публикует задачу;
+8. находит её в каталоге;
+9. создаёт предложение существующей команде;
+10. принимает предложение через `PATCH` и подтверждает статус повторным `GET`.
 
-- [x] Запуск с `AI_FORCE_FALLBACK=true`, без API key: questions 200, 3–5 строк, `X-AI-Mode: fallback`; RU/KK подтверждены отдельным smoke.
-- [x] Card fallback: описание сохранено дословно в `context`, включая пробелы, остальные поля пустые; answers не выданы за выполненную AI-структуризацию.
-- [x] Неверный ввод: пустой description, отсутствующий answers, null и неверные типы проверены offline-тестами; smoke подтвердил 400/413/415/405.
-- [ ] Frontend показывает резервный режим и позволяет редактирование; для cross-origin может прочитать `X-AI-Mode`.
-- [x] Отмена request context прекращает работу; общий deadline и максимум две попытки проверены offline-тестами.
-- [x] Offline-тесты покрывают невалидный вывод, refusal/truncation, timeout, auth errors, 429/5xx, отключённый provider и ограничение размеров.
-- [ ] Для live с ключом выполнены RU и KK semantic cases, включая injection, неизвестные факты, конфликты и исправления.
-- [ ] Нет неподтверждённых чисел, контактов и технологий; отдельно вручную проверен смысл, который не покрывает schema/guard.
-- [ ] Жюри показано различие live, fallback и synthetic fixture; нет утверждения о live-работе по одним fake tests.
+Рейтинг в этом flow возвращается backend; тест не подставляет искусственный результат.
 
-## Что согласовать для полного flow
+## AI API
 
-- Контракт карточки: оставить 11 перечисленных полей или определить имя/смысл отсутствующего двенадцатого.
-- Место пакета в существующем module и adapter router.
-- Применение найденной формулы rating и политику содержательности/«не знаю»; текущий код считает любой непустой после trim текст.
-- Хранение описания/ответов и человеческого подтверждения в backend.
-- Контракт task/team/proposal сущностей; fixture envelopes адаптируются к реальным моделям, AI schema не расширяется ради IDs.
-- CORS origin и отображение fallback, если frontend находится на другом origin.
+- `POST /api/ai/questions` возвращает 3–5 непустых вопросов.
+- `POST /api/ai/card` возвращает ровно 11 строковых полей карточки.
+- Fallback сохраняет исходное описание в `context`, а неизвестные поля оставляет пустыми.
+- `X-AI-Mode` различает `live` и `fallback`; frontend показывает режим пользователю.
+- Ошибки провайдера не раскрывают ключ, URL или сырой ответ внешнего API.
 
-Это согласования для последующей интеграции; они не препятствуют автономной проверке двух AI endpoints в стенде.
+## Ограничения проверки
+
+Live semantic cases не запускались, потому что для них нужен внешний API-ключ. Они не являются обязательными для локального fallback-demo. Полный сценарий frontend/backend проверен через реальные HTTP-маршруты общего handler; визуальная проверка браузера остаётся ручным шагом.

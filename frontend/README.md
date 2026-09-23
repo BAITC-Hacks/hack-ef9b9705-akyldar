@@ -14,7 +14,7 @@ copy .env.example .env
 npm run dev
 ```
 
-Open the URL printed by Vite, normally `http://localhost:5173`.
+Open the URL printed by Vite, normally `http://localhost:5173`. For the complete project setup see [../README.md](../README.md).
 
 ## Commands
 
@@ -49,4 +49,4 @@ Network calls are centralized in `src/api/`. See [integration.md](integration.md
 
 ## Current integration status
 
-The frontend is prepared for the agreed Go API at `VITE_API_URL`, but the backend is not part of this frontend directory and live end-to-end verification requires it to be running. AI routes may use the explicit demo-question fallback when unavailable. No backend or AI code is included or changed here.
+The frontend is integrated with the Go backend at `VITE_API_URL`. AI responses expose `X-AI-Mode`; the UI identifies live and fallback modes and keeps the generated card editable. The backend and AI module live in their own directories; the root README is authoritative for starting the complete project.

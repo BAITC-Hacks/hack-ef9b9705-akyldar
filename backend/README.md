@@ -1,5 +1,7 @@
 # Backend
 
+For complete project setup and the jury flow see [../README.md](../README.md).
+
 ## Stack
 
 - Go

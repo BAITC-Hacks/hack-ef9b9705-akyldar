@@ -4,7 +4,15 @@ export class ApiError extends Error{
   constructor(message,status=0){super(message);this.name='ApiError';this.status=status;}
 }
 
-export async function request(path,options={}){
+export function request(path,options={}){
+  return requestInternal(path,options,false);
+}
+
+export function requestWithMeta(path,options={}){
+  return requestInternal(path,options,true);
+}
+
+async function requestInternal(path,options,includeMeta){
   const init={...options,headers:{...(options.body?{'Content-Type':'application/json'}:{}),...(options.headers||{})}};
   try{
     const response=await fetch(`${API_URL}${path}`,init);
@@ -15,7 +23,7 @@ export async function request(path,options={}){
       const rawMessage=typeof body?.error==='string'?body.error:body?.error?.message;
       throw new ApiError(frontendErrorMessage(rawMessage),response.status);
     }
-    return body;
+    return includeMeta?{data:body,mode:response.headers.get('X-AI-Mode')||''}:body;
   }catch(error){
     if(error instanceof ApiError) throw error;
     throw new ApiError(`Не удаётся подключиться к серверу по адресу ${API_URL}. Убедитесь, что сервер запущен.`);

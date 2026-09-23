@@ -35,7 +35,7 @@ The frontend does not send Task internal fields such as `id`, `rating`, `readine
 - `POST /api/ai/questions` with `{ "description": "..." }` and a `{ "questions": ["..."] }` response.
 - `POST /api/ai/card` with `{ "description": "...", "answers": [{ "question": "...", "answer": "..." }] }`.
 
-If the AI routes are unavailable, the UI uses the explicit demo-question fallback and shows that fallback to the user.
+The UI reads `X-AI-Mode` and identifies live versus fallback responses. If the AI routes are unavailable, it uses the explicit demo-question fallback and tells the user to verify the generated content manually.
 
 ## Proposal flow
 

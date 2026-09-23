@@ -2,7 +2,7 @@
 
 ## Пакет и ответственность
 
-AI поставляется отдельным Go module `hackalem/ai`, Go 1.22+, стандартная библиотека. `cmd/demo` — локальный сервер с двумя endpoints. Ветка AI основана на `main` (`051f110`) и не включает backend/frontend. Ниже учтён код [ветки backend на `ba61fef`](https://github.com/BAITC-Hacks/hack-ef9b9705-akyldar/tree/ba61fef/backend), просмотренный при передаче. Это предложение подключения, а не выполненное объединение веток или проверка совместного приложения. `backend/go.mod` объявляет `module backend`, Go 1.25.0; для совместной сборки нужен Go 1.25 или новее. Не заменяйте его файлом `ai/go.mod`.
+AI поставляется отдельным Go module `hackalem/ai`, Go 1.22+, стандартная библиотека. `cmd/demo` — локальный сервер с двумя endpoints. В текущем репозитории соседние `backend/` и `ai/` уже объединены: `backend/go.mod` подключает `hackalem/ai` через local `replace`, а `backend/cmd/server` регистрирует AI routes на общем сервере. Для совместной сборки нужен Go 1.25 или новее. Не заменяйте `ai/go.mod` файлом backend.
 
 Основные API пакета:
 
@@ -55,9 +55,9 @@ func main() {
 
 В существующем backend используйте его config, server и router; новый сервер создавать не нужно. `NewHandler(service)` также предоставляет `http.Handler` для адаптера router. Сохраняйте путь `/api/ai/questions` или `/api/ai/card` при передаче запроса. Передавайте исходный request context, чтобы отключение клиента отменяло внешний запрос и ожидание повторной попытки.
 
-### Предлагаемое подключение к `origin/backend`
+### Подключение к backend
 
-После объединения веток расположение каталогов должно быть `backend/` и `ai/` рядом. Сохраните оба модуля. В `backend/go.mod` добавьте локальную зависимость (эти изменения в AI-ветке не выполнены):
+Расположение каталогов — `backend/` и `ai/` рядом. Оба модуля сохраняются. В `backend/go.mod` уже добавлена локальная зависимость:
 
 ```go
 require hackalem/ai v0.0.0
@@ -65,7 +65,7 @@ require hackalem/ai v0.0.0
 replace hackalem/ai => ../ai
 ```
 
-`hackalem/ai` здесь локальное имя, не адрес опубликованного Go-пакета; `replace` связывает его с соседней папкой. В `backend/cmd/server/main.go` добавьте import `ai "hackalem/ai"`. После создания трёх repository и перед созданием существующего `http.Server` используйте композицию handlers:
+`hackalem/ai` здесь локальное имя, не адрес опубликованного Go-пакета; `replace` связывает его с соседней папкой. В `backend/cmd/server/main.go` уже используется import `ai "hackalem/ai"` и композиция handlers:
 
 ```go
 aiConfig, err := ai.LoadConfigFromEnv()
@@ -81,19 +81,19 @@ ai.RegisterRoutes(combined, aiService)
 combined.Handle("/", httpapi.NewRouter(taskRepository, teamRepository, proposalRepository))
 ```
 
-В существующем `http.Server` задайте `Handler: httpapi.WithCORS(combined, frontendOrigin)` и `WriteTimeout: aiConfig.Timeout + 15*time.Second`. Остальные настройки backend и lifecycle сохраняются. Сейчас backend использует `WriteTimeout: 10*time.Second`, что короче стандартного AI deadline 15 секунд. Композиция оставляет сигнатуру `NewRouter` и его task/proposal routes прежними, передаёт URL и context без `StripPrefix`. Альтернатива — принять `*ai.Service` в `NewRouter` и вызвать `ai.RegisterRoutes` на его `mux`, обновив все callers и тесты backend.
+В текущем `http.Server` используются `Handler: httpapi.WithCORS(combined, frontendOrigin)` и `WriteTimeout: aiConfig.Timeout + 15*time.Second`. Композиция оставляет сигнатуру `NewRouter` и task/proposal routes прежними, передаёт URL и context без `StripPrefix`.
 
 Настройки AI передаются окружению процесса **backend**. `ai/run.ps1` запускает только отдельный demo и не загружает env в backend. Backend и demo по умолчанию используют порт 8080; для параллельной проверки задайте demo `-Address 127.0.0.1:8081`. Общий сервер запускает backend; второй AI-сервер ему не нужен.
 
-В `backend/internal/httpapi/cors.go` внутри разрешённого origin добавьте `w.Header().Set("Access-Control-Expose-Headers", "X-AI-Mode")`. Существующий `WithCORS` уже обслуживает OPTIONS и `Content-Type`; default origin — `http://localhost:5173`. Разместите его снаружи объединённого handler и сохраните согласованное `FRONTEND_ORIGIN`. До изменения браузер не сможет прочитать mode при cross-origin запросе, хотя HTTP header будет в ответе.
+В `backend/internal/httpapi/cors.go` уже настроены `Access-Control-Expose-Headers: X-AI-Mode`, OPTIONS и `Content-Type`; default origin — `http://localhost:5173`. Middleware размещён снаружи объединённого handler и использует согласованный `FRONTEND_ORIGIN`.
 
-Проверки запускаются отдельно из `ai/` и `backend/`: `go test ./...`, `go vet ./...`. Команда из корня и тесты одного module не проверяют соседний вложенный module. Приведённое подключение ещё не применено и требует отдельной проверки AI routes, старых backend routes, CORS и полного UI flow.
+Проверки запускаются отдельно из `ai/` и `backend/`: `go test -count=1 ./...`, `go vet ./...`. Полный HTTP flow с fallback AI проверяется тестом `backend/cmd/server/main_test.go:TestCompleteMVPFlow`; live semantic evaluation требует внешнего API-ключа.
 
 ### Сохранение карточки и совместимость моделей
 
 `backend/internal/model/task.go` содержит все 11 полей AI, а также `id`, `initial_description`, `rating`, `readiness_level`, `confirmed`, `published` и timestamps. Они остаются под управлением backend; AI JSON не расширяется. В просмотренном handler создание `POST /api/tasks` принимает `{initial_description, topic}`, а обновление `PUT /api/tasks/{id}` — 11 строк карточки. Поэтому после ручной проверки создайте draft с исходным `description` в `initial_description`, затем отправьте проверенную карточку в update endpoint. При повторном редактировании используйте существующий task ID. Массив `answers` в модели Task отсутствует: его хранение рядом с формой или отдельное расширение backend нужно согласовать, особенно при fallback.
 
-Ошибки task/proposal API имеют форму `{ "error": "..." }`, ошибки AI — `{ "error": { "code": "...", "message": "..." } }`. Frontend должен обрабатывать обе формы либо команда добавит явный adapter. Эта поставка не меняет существующий backend error contract.
+Ошибки task/proposal API имеют форму `{ "error": "..." }`, ошибки AI — `{ "error": { "code": "...", "message": "..." } }`; frontend обрабатывает обе формы.
 
 Fixtures — примеры для адаптации, не готовый импорт в API. Поля team (`name`, `interests`, `skills`, `technologies`) совпадают с просмотренной моделью. В proposals используйте реальные task/team IDs и входные `idea`, `plan`, `deadline`, `prototype_url`; fixture IDs, status и timestamps не подменяют значения, назначаемые backend. Оболочка `{synthetic, items}` и `source` карточки не являются body task/proposal endpoint.
 
@@ -188,7 +188,7 @@ AI не рассчитывает score и не меняет rating module. В `o
 | Business connection | contact 5 + interaction_format 5 |
 | Всего | 100 |
 
-`filled(value)` означает `strings.TrimSpace(value) != ""`; «не знаю» тоже считается заполнением. `title` и `topic` на score не влияют. Уровни: меньше 40 — `draft`, 40–69 — `working`, 70–89 — `ready`, от 90 — `priority`. Fallback заполняет только context и потому по коду может дать 10 баллов; это не доказательство готовности задачи. Эти сведения получены чтением исходников, совместный запрос AI → сохранение → rating не выполнялся. Политику для «не знаю» и содержательности нужно согласовать с backend; эта AI-поставка её не меняет. В demo показывайте рост только после реального сохранения и чтения backend-результата.
+`filled(value)` означает `strings.TrimSpace(value) != ""`; «не знаю» тоже считается заполнением. `title` и `topic` на score не влияют. Уровни: меньше 40 — `draft`, 40–69 — `working`, 70–89 — `ready`, от 90 — `priority`. Fallback заполняет только context и потому может дать 10 баллов; это не доказательство готовности задачи. Полный запрос AI → сохранение → rating проверяется backend integration test; в demo рост показывается только после реального сохранения и чтения backend-результата.
 
 ## Приёмка интеграции
 
@@ -196,6 +196,6 @@ AI не рассчитывает score и не меняет rating module. В `o
 2. Выполнить PowerShell-запросы из [README](../README.md) без ключа, проверить mode и схему.
 3. С доступным API отдельно выполнить [evaluation cases](../testdata/evaluation_cases.json), сохраняя вывод как live только при `X-AI-Mode: live`.
 4. Подключить frontend с редактированием и подтверждением, затем проверить сохранение и согласованный rating.
-5. Выполнить [полный checklist](integration-checklist.md) на существующих компонентах платформы. Mock-тесты не заменяют эти шаги.
+5. Выполнить [полный checklist](integration-checklist.md) и root [demo-script](../../docs/demo-script.md). Mock-тесты не заменяют HTTP flow.
 
-При разработке изолированного стенда 23.09.2026 базовый live smoke прошёл на `gpt-4.1-mini`: RU questions и KK card, HTTP 200, `X-AI-Mode: live`, по одной попытке. Секрет и `.local/` в клон не включены; при публикации live-запросы не повторялись. Полные semantic evaluations и совместный platform end-to-end не выполнены. Исторические результаты — [test-results.md](test-results.md), demo-сценарий — [demo.md](demo.md).
+При разработке изолированного стенда 23.09.2026 базовый live smoke прошёл на `gpt-4.1-mini`: RU questions и KK card, HTTP 200, `X-AI-Mode: live`, по одной попытке. Секрет и `.local/` в клон не включены; при публикации live-запросы не повторялись. Полные semantic evaluations не выполнены; совместный fallback platform end-to-end теперь проверяется `TestCompleteMVPFlow`. Исторические результаты — [test-results.md](test-results.md), standalone AI demo — [demo.md](demo.md).
