@@ -1,14 +1,17 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"backend/internal/database"
 	"backend/internal/httpapi"
 	"backend/internal/repository"
+	"backend/internal/seed"
 )
 
 func main() {
@@ -30,6 +33,13 @@ func main() {
 	taskRepository := repository.NewTaskRepository(db)
 	teamRepository := repository.NewTeamRepository(db)
 	proposalRepository := repository.NewProposalRepository(db)
+
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("SEED_DEMO_DATA")), "true") {
+		if err := seed.Run(context.Background(), db); err != nil {
+			log.Fatalf("seed demo data: %v", err)
+		}
+		log.Printf("demo data seeded")
+	}
 
 	server := &http.Server{
 		Addr:              ":8080",
