@@ -179,6 +179,8 @@ func (r *TaskRepository) Update(ctx context.Context, task *model.Task) error {
 			contact = ?,
 			interaction_format = ?,
 			topic = ?,
+			rating = ?,
+			readiness_level = ?,
 			updated_at = ?
 		WHERE id = ?
 	`,
@@ -193,6 +195,8 @@ func (r *TaskRepository) Update(ctx context.Context, task *model.Task) error {
 		task.Contact,
 		task.InteractionFormat,
 		task.Topic,
+		task.Rating,
+		task.ReadinessLevel,
 		now.Format(time.RFC3339Nano),
 		task.ID,
 	)

@@ -103,6 +103,8 @@ func TestTaskRepositoryUpdate(t *testing.T) {
 	task.Contact = "updated@example.com"
 	task.InteractionFormat = "Updated interaction"
 	task.Topic = "updated-topic"
+	task.Rating = 55
+	task.ReadinessLevel = "working"
 	if err := repo.Update(context.Background(), task); err != nil {
 		t.Fatalf("update task: %v", err)
 	}
@@ -117,11 +119,11 @@ func TestTaskRepositoryUpdate(t *testing.T) {
 	if got.InitialDescription != "Original draft description" {
 		t.Fatalf("expected initial description to remain unchanged, got %q", got.InitialDescription)
 	}
-	if got.Rating != 0 {
-		t.Fatalf("expected rating to remain 0, got %d", got.Rating)
+	if got.Rating != 55 {
+		t.Fatalf("expected rating 55, got %d", got.Rating)
 	}
-	if got.ReadinessLevel != "draft" {
-		t.Fatalf("expected readiness level to remain draft, got %q", got.ReadinessLevel)
+	if got.ReadinessLevel != "working" {
+		t.Fatalf("expected readiness level working, got %q", got.ReadinessLevel)
 	}
 	if got.Confirmed || got.Published {
 		t.Fatalf("expected confirmed and published to remain false: %+v", got)

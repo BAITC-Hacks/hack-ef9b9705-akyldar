@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"backend/internal/model"
+	"backend/internal/rating"
 	"backend/internal/repository"
 )
 
@@ -71,6 +72,23 @@ func (h *taskHandler) handleCollection(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *taskHandler) handleByID(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(r.URL.Path, "/rating") {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+
+		id, err := parseRatingTaskID(r.URL.Path)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid task id")
+			return
+		}
+
+		h.getRatingByID(w, r, id)
+		return
+	}
+
 	if r.Method != http.MethodGet && r.Method != http.MethodPut {
 		w.Header().Set("Allow", http.MethodGet+", "+http.MethodPut)
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -99,6 +117,20 @@ func (h *taskHandler) handleByID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, task)
+}
+
+func (h *taskHandler) getRatingByID(w http.ResponseWriter, r *http.Request, id int64) {
+	task, err := h.repository.GetByID(r.Context(), id)
+	if errors.Is(err, repository.ErrTaskNotFound) {
+		writeJSONError(w, http.StatusNotFound, "task not found")
+		return
+	}
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, rating.Calculate(*task))
 }
 
 func (h *taskHandler) updateByID(w http.ResponseWriter, r *http.Request, id int64) {
@@ -130,6 +162,10 @@ func (h *taskHandler) updateByID(w http.ResponseWriter, r *http.Request, id int6
 	task.InteractionFormat = request.InteractionFormat
 	task.Topic = request.Topic
 
+	calculation := rating.Calculate(*task)
+	task.Rating = calculation.Score
+	task.ReadinessLevel = calculation.Level
+
 	if err := h.repository.Update(r.Context(), task); err != nil {
 		if errors.Is(err, repository.ErrTaskNotFound) {
 			writeJSONError(w, http.StatusNotFound, "task not found")
@@ -144,6 +180,21 @@ func (h *taskHandler) updateByID(w http.ResponseWriter, r *http.Request, id int6
 
 func parseTaskID(path string) (int64, error) {
 	rawID := strings.TrimPrefix(path, "/api/tasks/")
+	if rawID == "" || strings.Contains(rawID, "/") {
+		return 0, errors.New("invalid task id")
+	}
+
+	id, err := strconv.ParseInt(rawID, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, errors.New("invalid task id")
+	}
+
+	return id, nil
+}
+
+func parseRatingTaskID(path string) (int64, error) {
+	rawID := strings.TrimPrefix(path, "/api/tasks/")
+	rawID = strings.TrimSuffix(rawID, "/rating")
 	if rawID == "" || strings.Contains(rawID, "/") {
 		return 0, errors.New("invalid task id")
 	}

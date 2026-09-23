@@ -11,6 +11,7 @@ import (
 
 	"backend/internal/database"
 	"backend/internal/model"
+	"backend/internal/rating"
 	"backend/internal/repository"
 )
 
@@ -248,6 +249,9 @@ func TestUpdateTask(t *testing.T) {
 	if updated.InitialDescription != "Original draft description" {
 		t.Fatalf("expected initial description to remain unchanged, got %q", updated.InitialDescription)
 	}
+	if updated.Rating != 100 || updated.ReadinessLevel != "priority" {
+		t.Fatalf("expected recalculated priority rating, got rating=%d level=%q", updated.Rating, updated.ReadinessLevel)
+	}
 
 	getRequest := httptest.NewRequest(http.MethodGet, "/api/tasks/"+strconv.FormatInt(created.ID, 10), nil)
 	getRecorder := httptest.NewRecorder()
@@ -276,12 +280,140 @@ func TestUpdateTaskErrors(t *testing.T) {
 		{name: "missing task", path: "/api/tasks/999", body: `{}`, expectCode: http.StatusNotFound},
 		{name: "malformed JSON", path: "/api/tasks/1", body: `{"title":`, expectCode: http.StatusBadRequest},
 		{name: "unknown rating field", path: "/api/tasks/1", body: `{"title":"Example","rating":100}`, expectCode: http.StatusBadRequest},
+		{name: "unknown readiness field", path: "/api/tasks/1", body: `{"title":"Example","readiness_level":"priority"}`, expectCode: http.StatusBadRequest},
 		{name: "initial description field", path: "/api/tasks/1", body: `{"initial_description":"Changed"}`, expectCode: http.StatusBadRequest},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPut, test.path, bytes.NewBufferString(test.body))
+			recorder := httptest.NewRecorder()
+			newTestRouter(t).ServeHTTP(recorder, req)
+
+			if recorder.Code != test.expectCode {
+				t.Fatalf("expected status %d, got %d", test.expectCode, recorder.Code)
+			}
+			if contentType := recorder.Header().Get("Content-Type"); contentType != "application/json" {
+				t.Fatalf("expected JSON content type, got %q", contentType)
+			}
+		})
+	}
+}
+
+func TestUpdateTaskRecalculatesRating(t *testing.T) {
+	router := newTestRouter(t)
+
+	createRequest := httptest.NewRequest(http.MethodPost, "/api/tasks", bytes.NewBufferString(`{"initial_description":"Original draft description"}`))
+	createRecorder := httptest.NewRecorder()
+	router.ServeHTTP(createRecorder, createRequest)
+	if createRecorder.Code != http.StatusCreated {
+		t.Fatalf("expected create status %d, got %d", http.StatusCreated, createRecorder.Code)
+	}
+
+	var created model.Task
+	if err := json.NewDecoder(createRecorder.Body).Decode(&created); err != nil {
+		t.Fatalf("decode created task: %v", err)
+	}
+
+	put := func(body string) model.Task {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPut, "/api/tasks/"+strconv.FormatInt(created.ID, 10), bytes.NewBufferString(body))
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, req)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("expected update status %d, got %d", http.StatusOK, recorder.Code)
+		}
+
+		var updated model.Task
+		if err := json.NewDecoder(recorder.Body).Decode(&updated); err != nil {
+			t.Fatalf("decode updated task: %v", err)
+		}
+		return updated
+	}
+
+	first := put(`{"context":"Warehouse operations"}`)
+	if first.Rating != 10 || first.ReadinessLevel != "draft" {
+		t.Fatalf("expected context-only rating 10/draft, got %d/%q", first.Rating, first.ReadinessLevel)
+	}
+
+	second := put(`{"context":"Warehouse operations","need":"Reduce manual work"}`)
+	if second.Rating != 20 || second.ReadinessLevel != "draft" {
+		t.Fatalf("expected context-and-need rating 20/draft, got %d/%q", second.Rating, second.ReadinessLevel)
+	}
+
+	getRequest := httptest.NewRequest(http.MethodGet, "/api/tasks/"+strconv.FormatInt(created.ID, 10), nil)
+	getRecorder := httptest.NewRecorder()
+	router.ServeHTTP(getRecorder, getRequest)
+	if getRecorder.Code != http.StatusOK {
+		t.Fatalf("expected get status %d, got %d", http.StatusOK, getRecorder.Code)
+	}
+	var fetched model.Task
+	if err := json.NewDecoder(getRecorder.Body).Decode(&fetched); err != nil {
+		t.Fatalf("decode fetched task: %v", err)
+	}
+	if fetched.Rating != 20 || fetched.ReadinessLevel != "draft" {
+		t.Fatalf("expected persisted rating 20/draft, got %d/%q", fetched.Rating, fetched.ReadinessLevel)
+	}
+}
+
+func TestGetTaskRating(t *testing.T) {
+	router := newTestRouter(t)
+
+	createRequest := httptest.NewRequest(http.MethodPost, "/api/tasks", bytes.NewBufferString(`{"initial_description":"Original draft description"}`))
+	createRecorder := httptest.NewRecorder()
+	router.ServeHTTP(createRecorder, createRequest)
+	if createRecorder.Code != http.StatusCreated {
+		t.Fatalf("expected create status %d, got %d", http.StatusCreated, createRecorder.Code)
+	}
+
+	var created model.Task
+	if err := json.NewDecoder(createRecorder.Body).Decode(&created); err != nil {
+		t.Fatalf("decode created task: %v", err)
+	}
+
+	updateRequest := httptest.NewRequest(http.MethodPut, "/api/tasks/"+strconv.FormatInt(created.ID, 10), bytes.NewBufferString(`{"context":"Context","need":"Need","data":"Data"}`))
+	updateRecorder := httptest.NewRecorder()
+	router.ServeHTTP(updateRecorder, updateRequest)
+	if updateRecorder.Code != http.StatusOK {
+		t.Fatalf("expected update status %d, got %d", http.StatusOK, updateRecorder.Code)
+	}
+
+	ratingRequest := httptest.NewRequest(http.MethodGet, "/api/tasks/"+strconv.FormatInt(created.ID, 10)+"/rating", nil)
+	ratingRecorder := httptest.NewRecorder()
+	router.ServeHTTP(ratingRecorder, ratingRequest)
+	if ratingRecorder.Code != http.StatusOK {
+		t.Fatalf("expected rating status %d, got %d", http.StatusOK, ratingRecorder.Code)
+	}
+
+	var result rating.Result
+	if err := json.NewDecoder(ratingRecorder.Body).Decode(&result); err != nil {
+		t.Fatalf("decode rating response: %v", err)
+	}
+	if result.Score != 40 || result.Level != "working" {
+		t.Fatalf("expected rating 40/working, got %d/%q", result.Score, result.Level)
+	}
+	if result.Breakdown["context_need"] != 20 || result.Breakdown["data"] != 20 {
+		t.Fatalf("unexpected rating breakdown: %+v", result.Breakdown)
+	}
+	if len(result.Missing) != 6 || result.Missing[0] != "expected_result" {
+		t.Fatalf("unexpected missing fields: %v", result.Missing)
+	}
+}
+
+func TestGetTaskRatingErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		path       string
+		expectCode int
+	}{
+		{name: "invalid ID", path: "/api/tasks/invalid/rating", expectCode: http.StatusBadRequest},
+		{name: "non-positive ID", path: "/api/tasks/0/rating", expectCode: http.StatusBadRequest},
+		{name: "missing task", path: "/api/tasks/999/rating", expectCode: http.StatusNotFound},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, test.path, nil)
 			recorder := httptest.NewRecorder()
 			newTestRouter(t).ServeHTTP(recorder, req)
 
