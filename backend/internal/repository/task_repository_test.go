@@ -144,3 +144,105 @@ func TestTaskRepositoryUpdateNotFound(t *testing.T) {
 		t.Fatalf("expected ErrTaskNotFound, got %v", err)
 	}
 }
+
+func TestTaskRepositoryConfirm(t *testing.T) {
+	repo := newTestTaskRepository(t)
+	task := &model.Task{InitialDescription: "Draft task", Rating: 10, ReadinessLevel: "draft"}
+	if err := repo.Create(context.Background(), task); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	task.Rating = 10
+	task.ReadinessLevel = "draft"
+	originalCreatedAt := task.CreatedAt
+	originalUpdatedAt := task.UpdatedAt
+	time.Sleep(time.Millisecond)
+
+	if err := repo.Confirm(context.Background(), task); err != nil {
+		t.Fatalf("confirm task: %v", err)
+	}
+
+	confirmed, err := repo.GetByID(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("get confirmed task: %v", err)
+	}
+	if !confirmed.Confirmed {
+		t.Fatal("expected task to be confirmed")
+	}
+	if confirmed.Published {
+		t.Fatal("expected task to remain unpublished")
+	}
+	if confirmed.Rating != 10 || confirmed.ReadinessLevel != "draft" {
+		t.Fatalf("unexpected persisted rating state: rating=%d level=%q", confirmed.Rating, confirmed.ReadinessLevel)
+	}
+	if !confirmed.CreatedAt.Equal(originalCreatedAt) {
+		t.Fatal("expected created_at to remain unchanged")
+	}
+	if !confirmed.UpdatedAt.After(originalUpdatedAt) {
+		t.Fatal("expected updated_at to change")
+	}
+
+	if err := repo.Confirm(context.Background(), confirmed); err != nil {
+		t.Fatalf("confirm already-confirmed task: %v", err)
+	}
+}
+
+func TestTaskRepositoryConfirmNotFound(t *testing.T) {
+	repo := newTestTaskRepository(t)
+
+	err := repo.Confirm(context.Background(), &model.Task{ID: 999})
+	if !errors.Is(err, ErrTaskNotFound) {
+		t.Fatalf("expected ErrTaskNotFound, got %v", err)
+	}
+}
+
+func TestTaskRepositoryPublish(t *testing.T) {
+	repo := newTestTaskRepository(t)
+	task := &model.Task{InitialDescription: "Low-rated task"}
+	if err := repo.Create(context.Background(), task); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	if err := repo.Publish(context.Background(), task); !errors.Is(err, ErrTaskNotConfirmed) {
+		t.Fatalf("expected ErrTaskNotConfirmed, got %v", err)
+	}
+
+	if err := repo.Confirm(context.Background(), task); err != nil {
+		t.Fatalf("confirm task: %v", err)
+	}
+	originalCreatedAt := task.CreatedAt
+	originalUpdatedAt := task.UpdatedAt
+	time.Sleep(time.Millisecond)
+
+	if err := repo.Publish(context.Background(), task); err != nil {
+		t.Fatalf("publish task: %v", err)
+	}
+	published, err := repo.GetByID(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("get published task: %v", err)
+	}
+	if !published.Published {
+		t.Fatal("expected task to be published")
+	}
+	if published.Rating != 0 || published.ReadinessLevel != "draft" {
+		t.Fatalf("publication should not change rating: rating=%d level=%q", published.Rating, published.ReadinessLevel)
+	}
+	if !published.CreatedAt.Equal(originalCreatedAt) {
+		t.Fatal("expected created_at to remain unchanged")
+	}
+	if !published.UpdatedAt.After(originalUpdatedAt) {
+		t.Fatal("expected updated_at to change")
+	}
+
+	if err := repo.Publish(context.Background(), published); err != nil {
+		t.Fatalf("publish already-published task: %v", err)
+	}
+}
+
+func TestTaskRepositoryPublishNotFound(t *testing.T) {
+	repo := newTestTaskRepository(t)
+
+	err := repo.Publish(context.Background(), &model.Task{ID: 999, Confirmed: true})
+	if !errors.Is(err, ErrTaskNotFound) {
+		t.Fatalf("expected ErrTaskNotFound, got %v", err)
+	}
+}

@@ -11,6 +11,7 @@ import (
 )
 
 var ErrTaskNotFound = errors.New("task not found")
+var ErrTaskNotConfirmed = errors.New("task must be confirmed before publishing")
 
 type TaskRepository struct {
 	db *sql.DB
@@ -212,6 +213,86 @@ func (r *TaskRepository) Update(ctx context.Context, task *model.Task) error {
 		return fmt.Errorf("%w: %d", ErrTaskNotFound, task.ID)
 	}
 
+	task.UpdatedAt = now
+	return nil
+}
+
+func (r *TaskRepository) Confirm(ctx context.Context, task *model.Task) error {
+	if task == nil {
+		return errors.New("task is nil")
+	}
+
+	now := time.Now().UTC()
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE tasks
+		SET
+			rating = ?,
+			readiness_level = ?,
+			confirmed = 1,
+			updated_at = ?
+		WHERE id = ?
+	`,
+		task.Rating,
+		task.ReadinessLevel,
+		now.Format(time.RFC3339Nano),
+		task.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("confirm task: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("get confirmed task count: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("%w: %d", ErrTaskNotFound, task.ID)
+	}
+
+	task.Confirmed = true
+	task.UpdatedAt = now
+	return nil
+}
+
+func (r *TaskRepository) Publish(ctx context.Context, task *model.Task) error {
+	if task == nil {
+		return errors.New("task is nil")
+	}
+
+	now := time.Now().UTC()
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE tasks
+		SET
+			published = 1,
+			updated_at = ?
+		WHERE id = ? AND confirmed = 1
+	`,
+		now.Format(time.RFC3339Nano),
+		task.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("publish task: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("get published task count: %w", err)
+	}
+	if rowsAffected == 0 {
+		current, getErr := r.GetByID(ctx, task.ID)
+		if errors.Is(getErr, ErrTaskNotFound) {
+			return fmt.Errorf("%w: %d", ErrTaskNotFound, task.ID)
+		}
+		if getErr != nil {
+			return fmt.Errorf("check task confirmation: %w", getErr)
+		}
+		if !current.Confirmed {
+			return ErrTaskNotConfirmed
+		}
+		return fmt.Errorf("publish task affected no rows for task %d", task.ID)
+	}
+
+	task.Published = true
 	task.UpdatedAt = now
 	return nil
 }

@@ -88,6 +88,38 @@ func (h *taskHandler) handleByID(w http.ResponseWriter, r *http.Request) {
 		h.getRatingByID(w, r, id)
 		return
 	}
+	if strings.HasSuffix(r.URL.Path, "/confirm") {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+
+		id, err := parseTaskActionID(r.URL.Path, "/confirm")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid task id")
+			return
+		}
+
+		h.confirmByID(w, r, id)
+		return
+	}
+	if strings.HasSuffix(r.URL.Path, "/publish") {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+
+		id, err := parseTaskActionID(r.URL.Path, "/publish")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid task id")
+			return
+		}
+
+		h.publishByID(w, r, id)
+		return
+	}
 
 	if r.Method != http.MethodGet && r.Method != http.MethodPut {
 		w.Header().Set("Allow", http.MethodGet+", "+http.MethodPut)
@@ -131,6 +163,63 @@ func (h *taskHandler) getRatingByID(w http.ResponseWriter, r *http.Request, id i
 	}
 
 	writeJSON(w, http.StatusOK, rating.Calculate(*task))
+}
+
+func (h *taskHandler) confirmByID(w http.ResponseWriter, r *http.Request, id int64) {
+	task, err := h.repository.GetByID(r.Context(), id)
+	if errors.Is(err, repository.ErrTaskNotFound) {
+		writeJSONError(w, http.StatusNotFound, "task not found")
+		return
+	}
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	calculation := rating.Calculate(*task)
+	task.Rating = calculation.Score
+	task.ReadinessLevel = calculation.Level
+	if err := h.repository.Confirm(r.Context(), task); err != nil {
+		if errors.Is(err, repository.ErrTaskNotFound) {
+			writeJSONError(w, http.StatusNotFound, "task not found")
+			return
+		}
+		writeJSONError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, task)
+}
+
+func (h *taskHandler) publishByID(w http.ResponseWriter, r *http.Request, id int64) {
+	task, err := h.repository.GetByID(r.Context(), id)
+	if errors.Is(err, repository.ErrTaskNotFound) {
+		writeJSONError(w, http.StatusNotFound, "task not found")
+		return
+	}
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	if !task.Confirmed {
+		writeJSONError(w, http.StatusConflict, "task must be confirmed before publishing")
+		return
+	}
+
+	if err := h.repository.Publish(r.Context(), task); err != nil {
+		if errors.Is(err, repository.ErrTaskNotFound) {
+			writeJSONError(w, http.StatusNotFound, "task not found")
+			return
+		}
+		if errors.Is(err, repository.ErrTaskNotConfirmed) {
+			writeJSONError(w, http.StatusConflict, "task must be confirmed before publishing")
+			return
+		}
+		writeJSONError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, task)
 }
 
 func (h *taskHandler) updateByID(w http.ResponseWriter, r *http.Request, id int64) {
@@ -193,8 +282,12 @@ func parseTaskID(path string) (int64, error) {
 }
 
 func parseRatingTaskID(path string) (int64, error) {
+	return parseTaskActionID(path, "/rating")
+}
+
+func parseTaskActionID(path string, suffix string) (int64, error) {
 	rawID := strings.TrimPrefix(path, "/api/tasks/")
-	rawID = strings.TrimSuffix(rawID, "/rating")
+	rawID = strings.TrimSuffix(rawID, suffix)
 	if rawID == "" || strings.Contains(rawID, "/") {
 		return 0, errors.New("invalid task id")
 	}

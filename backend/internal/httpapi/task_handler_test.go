@@ -426,3 +426,170 @@ func TestGetTaskRatingErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestConfirmAndPublishTask(t *testing.T) {
+	router := newTestRouter(t)
+
+	createRequest := httptest.NewRequest(http.MethodPost, "/api/tasks", bytes.NewBufferString(`{"initial_description":"Low-rated task"}`))
+	createRecorder := httptest.NewRecorder()
+	router.ServeHTTP(createRecorder, createRequest)
+	if createRecorder.Code != http.StatusCreated {
+		t.Fatalf("expected create status %d, got %d", http.StatusCreated, createRecorder.Code)
+	}
+
+	var created model.Task
+	if err := json.NewDecoder(createRecorder.Body).Decode(&created); err != nil {
+		t.Fatalf("decode created task: %v", err)
+	}
+	taskPath := "/api/tasks/" + strconv.FormatInt(created.ID, 10)
+
+	confirmRequest := httptest.NewRequest(http.MethodPost, taskPath+"/confirm", nil)
+	confirmRecorder := httptest.NewRecorder()
+	router.ServeHTTP(confirmRecorder, confirmRequest)
+	if confirmRecorder.Code != http.StatusOK {
+		t.Fatalf("expected confirm status %d, got %d", http.StatusOK, confirmRecorder.Code)
+	}
+
+	var confirmed model.Task
+	if err := json.NewDecoder(confirmRecorder.Body).Decode(&confirmed); err != nil {
+		t.Fatalf("decode confirmed task: %v", err)
+	}
+	if !confirmed.Confirmed || confirmed.Published {
+		t.Fatalf("unexpected confirmation state: confirmed=%t published=%t", confirmed.Confirmed, confirmed.Published)
+	}
+	if confirmed.Rating != 0 || confirmed.ReadinessLevel != "draft" {
+		t.Fatalf("unexpected low-rating confirmation state: rating=%d level=%q", confirmed.Rating, confirmed.ReadinessLevel)
+	}
+
+	confirmAgainRequest := httptest.NewRequest(http.MethodPost, taskPath+"/confirm", nil)
+	confirmAgainRecorder := httptest.NewRecorder()
+	router.ServeHTTP(confirmAgainRecorder, confirmAgainRequest)
+	if confirmAgainRecorder.Code != http.StatusOK {
+		t.Fatalf("expected repeated confirm status %d, got %d", http.StatusOK, confirmAgainRecorder.Code)
+	}
+
+	publishRequest := httptest.NewRequest(http.MethodPost, taskPath+"/publish", nil)
+	publishRecorder := httptest.NewRecorder()
+	router.ServeHTTP(publishRecorder, publishRequest)
+	if publishRecorder.Code != http.StatusOK {
+		t.Fatalf("expected publish status %d, got %d", http.StatusOK, publishRecorder.Code)
+	}
+
+	var published model.Task
+	if err := json.NewDecoder(publishRecorder.Body).Decode(&published); err != nil {
+		t.Fatalf("decode published task: %v", err)
+	}
+	if !published.Confirmed || !published.Published {
+		t.Fatalf("unexpected publication state: confirmed=%t published=%t", published.Confirmed, published.Published)
+	}
+	if published.Rating != confirmed.Rating || published.ReadinessLevel != confirmed.ReadinessLevel {
+		t.Fatalf("publication changed rating state: before=%d/%q after=%d/%q", confirmed.Rating, confirmed.ReadinessLevel, published.Rating, published.ReadinessLevel)
+	}
+
+	publishAgainRequest := httptest.NewRequest(http.MethodPost, taskPath+"/publish", nil)
+	publishAgainRecorder := httptest.NewRecorder()
+	router.ServeHTTP(publishAgainRecorder, publishAgainRequest)
+	if publishAgainRecorder.Code != http.StatusOK {
+		t.Fatalf("expected repeated publish status %d, got %d", http.StatusOK, publishAgainRecorder.Code)
+	}
+}
+
+func TestConfirmRecalculatesRating(t *testing.T) {
+	router := newTestRouter(t)
+
+	createRequest := httptest.NewRequest(http.MethodPost, "/api/tasks", bytes.NewBufferString(`{"initial_description":"Structured task"}`))
+	createRecorder := httptest.NewRecorder()
+	router.ServeHTTP(createRecorder, createRequest)
+	if createRecorder.Code != http.StatusCreated {
+		t.Fatalf("expected create status %d, got %d", http.StatusCreated, createRecorder.Code)
+	}
+
+	var created model.Task
+	if err := json.NewDecoder(createRecorder.Body).Decode(&created); err != nil {
+		t.Fatalf("decode created task: %v", err)
+	}
+	taskPath := "/api/tasks/" + strconv.FormatInt(created.ID, 10)
+
+	updateRequest := httptest.NewRequest(http.MethodPut, taskPath, bytes.NewBufferString(`{"context":"Context","need":"Need","data":"Data"}`))
+	updateRecorder := httptest.NewRecorder()
+	router.ServeHTTP(updateRecorder, updateRequest)
+	if updateRecorder.Code != http.StatusOK {
+		t.Fatalf("expected update status %d, got %d", http.StatusOK, updateRecorder.Code)
+	}
+
+	confirmRequest := httptest.NewRequest(http.MethodPost, taskPath+"/confirm", nil)
+	confirmRecorder := httptest.NewRecorder()
+	router.ServeHTTP(confirmRecorder, confirmRequest)
+	if confirmRecorder.Code != http.StatusOK {
+		t.Fatalf("expected confirm status %d, got %d", http.StatusOK, confirmRecorder.Code)
+	}
+
+	var confirmed model.Task
+	if err := json.NewDecoder(confirmRecorder.Body).Decode(&confirmed); err != nil {
+		t.Fatalf("decode confirmed task: %v", err)
+	}
+	if confirmed.Rating != 40 || confirmed.ReadinessLevel != "working" {
+		t.Fatalf("expected recalculated rating 40/working, got %d/%q", confirmed.Rating, confirmed.ReadinessLevel)
+	}
+}
+
+func TestPublishRequiresConfirmation(t *testing.T) {
+	router := newTestRouter(t)
+
+	createRequest := httptest.NewRequest(http.MethodPost, "/api/tasks", bytes.NewBufferString(`{"initial_description":"Unconfirmed task"}`))
+	createRecorder := httptest.NewRecorder()
+	router.ServeHTTP(createRecorder, createRequest)
+
+	var created model.Task
+	if err := json.NewDecoder(createRecorder.Body).Decode(&created); err != nil {
+		t.Fatalf("decode created task: %v", err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/api/tasks/"+strconv.FormatInt(created.ID, 10)+"/publish", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("expected status %d, got %d", http.StatusConflict, recorder.Code)
+	}
+	if contentType := recorder.Header().Get("Content-Type"); contentType != "application/json" {
+		t.Fatalf("expected JSON content type, got %q", contentType)
+	}
+
+	var response struct {
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if response.Error != "task must be confirmed before publishing" {
+		t.Fatalf("unexpected error %q", response.Error)
+	}
+}
+
+func TestConfirmAndPublishTaskErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		path       string
+		expectCode int
+	}{
+		{name: "invalid confirm ID", path: "/api/tasks/invalid/confirm", expectCode: http.StatusBadRequest},
+		{name: "invalid publish ID", path: "/api/tasks/0/publish", expectCode: http.StatusBadRequest},
+		{name: "missing confirm task", path: "/api/tasks/999/confirm", expectCode: http.StatusNotFound},
+		{name: "missing publish task", path: "/api/tasks/999/publish", expectCode: http.StatusNotFound},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, test.path, nil)
+			recorder := httptest.NewRecorder()
+			newTestRouter(t).ServeHTTP(recorder, req)
+
+			if recorder.Code != test.expectCode {
+				t.Fatalf("expected status %d, got %d", test.expectCode, recorder.Code)
+			}
+			if contentType := recorder.Header().Get("Content-Type"); contentType != "application/json" {
+				t.Fatalf("expected JSON content type, got %q", contentType)
+			}
+		})
+	}
+}
