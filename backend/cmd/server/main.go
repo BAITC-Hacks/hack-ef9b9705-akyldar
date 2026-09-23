@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"backend/internal/database"
@@ -18,6 +21,10 @@ func main() {
 	databasePath := os.Getenv("DATABASE_PATH")
 	if databasePath == "" {
 		databasePath = "./data/app.db"
+	}
+	frontendOrigin := os.Getenv("FRONTEND_ORIGIN")
+	if strings.TrimSpace(frontendOrigin) == "" {
+		frontendOrigin = httpapi.DefaultFrontendOrigin
 	}
 
 	db, err := database.Open(databasePath)
@@ -43,15 +50,36 @@ func main() {
 
 	server := &http.Server{
 		Addr:              ":8080",
-		Handler:           httpapi.NewRouter(taskRepository, teamRepository, proposalRepository),
+		Handler:           httpapi.WithCORS(httpapi.NewRouter(taskRepository, teamRepository, proposalRepository), frontendOrigin),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
 
+	shutdownContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	log.Printf("server listening on %s", server.Addr)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("server failed: %v", err)
+	serverErrors := make(chan error, 1)
+	go func() {
+		serverErrors <- server.ListenAndServe()
+	}()
+
+	select {
+	case err := <-serverErrors:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("server failed: %v", err)
+		}
+	case <-shutdownContext.Done():
+		log.Printf("shutdown signal received")
+		shutdownTimeout, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownTimeout); err != nil {
+			log.Printf("server shutdown failed: %v", err)
+		}
+		if err := <-serverErrors; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("server failed during shutdown: %v", err)
+		}
 	}
 }
