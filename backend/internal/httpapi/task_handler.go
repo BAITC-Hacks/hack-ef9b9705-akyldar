@@ -41,8 +41,12 @@ type updateTaskRequest struct {
 }
 
 func (h *taskHandler) handleCollection(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		h.listTasks(w, r)
+		return
+	}
 	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
+		w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
@@ -69,6 +73,43 @@ func (h *taskHandler) handleCollection(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, task)
+}
+
+func (h *taskHandler) listTasks(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	sort := strings.TrimSpace(query.Get("sort"))
+	if sort != "" && sort != "rating" {
+		writeJSONError(w, http.StatusBadRequest, "invalid sort parameter")
+		return
+	}
+
+	level := strings.TrimSpace(query.Get("level"))
+	if level != "" && !validReadinessLevel(level) {
+		writeJSONError(w, http.StatusBadRequest, "invalid readiness level")
+		return
+	}
+
+	filter := repository.TaskListFilter{
+		Topic: strings.TrimSpace(query.Get("topic")),
+		Level: level,
+		Sort:  sort,
+	}
+	tasks, err := h.repository.ListPublished(r.Context(), filter)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, tasks)
+}
+
+func validReadinessLevel(level string) bool {
+	switch level {
+	case "draft", "working", "ready", "priority":
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *taskHandler) handleByID(w http.ResponseWriter, r *http.Request) {

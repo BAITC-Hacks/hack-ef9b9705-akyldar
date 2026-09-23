@@ -31,6 +31,43 @@ func newTestRouter(t *testing.T) http.Handler {
 	return NewRouter(repository.NewTaskRepository(db))
 }
 
+func newCatalogTestRouter(t *testing.T) (http.Handler, *repository.TaskRepository) {
+	t.Helper()
+
+	db, err := database.Open(filepath.Join(t.TempDir(), "catalog.db"))
+	if err != nil {
+		t.Fatalf("open catalog test database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	if err := database.InitSchema(db); err != nil {
+		t.Fatalf("initialize catalog test schema: %v", err)
+	}
+
+	repo := repository.NewTaskRepository(db)
+	return NewRouter(repo), repo
+}
+
+func seedPublishedCatalogTask(t *testing.T, repo *repository.TaskRepository, task *model.Task) {
+	t.Helper()
+
+	if err := repo.Create(t.Context(), task); err != nil {
+		t.Fatalf("create catalog task: %v", err)
+	}
+	calculation := rating.Calculate(*task)
+	task.Rating = calculation.Score
+	task.ReadinessLevel = calculation.Level
+	if err := repo.Update(t.Context(), task); err != nil {
+		t.Fatalf("update catalog task rating: %v", err)
+	}
+	if err := repo.Confirm(t.Context(), task); err != nil {
+		t.Fatalf("confirm catalog task: %v", err)
+	}
+	if err := repo.Publish(t.Context(), task); err != nil {
+		t.Fatalf("publish catalog task: %v", err)
+	}
+}
+
 func TestCreateTask(t *testing.T) {
 	router := newTestRouter(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/tasks", bytes.NewBufferString(`{"initial_description":"Need warehouse automation","topic":"logistics"}`))
@@ -586,6 +623,130 @@ func TestConfirmAndPublishTaskErrors(t *testing.T) {
 
 			if recorder.Code != test.expectCode {
 				t.Fatalf("expected status %d, got %d", test.expectCode, recorder.Code)
+			}
+			if contentType := recorder.Header().Get("Content-Type"); contentType != "application/json" {
+				t.Fatalf("expected JSON content type, got %q", contentType)
+			}
+		})
+	}
+}
+
+func TestListTasksCatalog(t *testing.T) {
+	router, repo := newCatalogTestRouter(t)
+
+	unpublished := &model.Task{Title: "Unpublished", Topic: "logistics"}
+	if err := repo.Create(t.Context(), unpublished); err != nil {
+		t.Fatalf("create unpublished task: %v", err)
+	}
+
+	seedPublishedCatalogTask(t, repo, &model.Task{Title: "Draft", Topic: "logistics", Context: "Context", Need: "Need"})
+	seedPublishedCatalogTask(t, repo, &model.Task{Title: "Working", Topic: "logistics", Context: "Context", Need: "Need", Data: "Data", ExpectedResult: "Result"})
+	seedPublishedCatalogTask(t, repo, &model.Task{Title: "Ready", Topic: "operations", Context: "Context", Need: "Need", Data: "Data", ExpectedResult: "Result", Constraints: "Constraints", Users: "Users"})
+	seedPublishedCatalogTask(t, repo, &model.Task{Title: "Priority", Topic: "logistics", Context: "Context", Need: "Need", Data: "Data", ExpectedResult: "Result", SuccessCriteria: "Criteria", Constraints: "Constraints", Users: "Users", Contact: "contact@example.com"})
+
+	request := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected catalog status %d, got %d", http.StatusOK, recorder.Code)
+	}
+
+	var tasks []model.Task
+	if err := json.NewDecoder(recorder.Body).Decode(&tasks); err != nil {
+		t.Fatalf("decode catalog: %v", err)
+	}
+	if len(tasks) != 4 {
+		t.Fatalf("expected 4 published tasks, got %d", len(tasks))
+	}
+	if tasks[0].Title != "Priority" || tasks[3].Title != "Draft" {
+		t.Fatalf("expected newest-first catalog order, got %+v", tasks)
+	}
+	for _, task := range tasks {
+		if task.ID == unpublished.ID {
+			t.Fatalf("unpublished task was returned: %+v", task)
+		}
+	}
+
+	sortedRequest := httptest.NewRequest(http.MethodGet, "/api/tasks?sort=rating", nil)
+	sortedRecorder := httptest.NewRecorder()
+	router.ServeHTTP(sortedRecorder, sortedRequest)
+	var sorted []model.Task
+	if err := json.NewDecoder(sortedRecorder.Body).Decode(&sorted); err != nil {
+		t.Fatalf("decode sorted catalog: %v", err)
+	}
+	for index, expected := range []int{95, 75, 55, 20} {
+		if sorted[index].Rating != expected {
+			t.Fatalf("expected rating %d at index %d, got %d", expected, index, sorted[index].Rating)
+		}
+	}
+
+	topicRequest := httptest.NewRequest(http.MethodGet, "/api/tasks?topic=%20logistics%20", nil)
+	topicRecorder := httptest.NewRecorder()
+	router.ServeHTTP(topicRecorder, topicRequest)
+	var logistics []model.Task
+	if err := json.NewDecoder(topicRecorder.Body).Decode(&logistics); err != nil {
+		t.Fatalf("decode topic catalog: %v", err)
+	}
+	if len(logistics) != 3 {
+		t.Fatalf("expected 3 logistics tasks, got %d", len(logistics))
+	}
+
+	for _, level := range []string{"draft", "working", "ready", "priority"} {
+		levelRequest := httptest.NewRequest(http.MethodGet, "/api/tasks?level="+level, nil)
+		levelRecorder := httptest.NewRecorder()
+		router.ServeHTTP(levelRecorder, levelRequest)
+		var levelTasks []model.Task
+		if err := json.NewDecoder(levelRecorder.Body).Decode(&levelTasks); err != nil {
+			t.Fatalf("decode %s catalog: %v", level, err)
+		}
+		if len(levelTasks) != 1 || levelTasks[0].ReadinessLevel != level {
+			t.Fatalf("unexpected %s catalog: %+v", level, levelTasks)
+		}
+	}
+
+	combinedRequest := httptest.NewRequest(http.MethodGet, "/api/tasks?topic=logistics&level=priority&sort=rating", nil)
+	combinedRecorder := httptest.NewRecorder()
+	router.ServeHTTP(combinedRecorder, combinedRequest)
+	var combined []model.Task
+	if err := json.NewDecoder(combinedRecorder.Body).Decode(&combined); err != nil {
+		t.Fatalf("decode combined catalog: %v", err)
+	}
+	if len(combined) != 1 || combined[0].Title != "Priority" {
+		t.Fatalf("unexpected combined catalog: %+v", combined)
+	}
+
+	emptyRequest := httptest.NewRequest(http.MethodGet, "/api/tasks?topic=missing", nil)
+	emptyRecorder := httptest.NewRecorder()
+	router.ServeHTTP(emptyRecorder, emptyRequest)
+	if emptyRecorder.Code != http.StatusOK {
+		t.Fatalf("expected empty catalog status %d, got %d", http.StatusOK, emptyRecorder.Code)
+	}
+	var empty []model.Task
+	if err := json.NewDecoder(emptyRecorder.Body).Decode(&empty); err != nil {
+		t.Fatalf("decode empty catalog: %v", err)
+	}
+	if empty == nil || len(empty) != 0 {
+		t.Fatalf("expected empty array, got %+v", empty)
+	}
+}
+
+func TestListTasksCatalogValidation(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "invalid sort", path: "/api/tasks?sort=abc"},
+		{name: "invalid level", path: "/api/tasks?level=abc"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, test.path, nil)
+			recorder := httptest.NewRecorder()
+			newTestRouter(t).ServeHTTP(recorder, req)
+
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("expected status %d, got %d", http.StatusBadRequest, recorder.Code)
 			}
 			if contentType := recorder.Header().Get("Content-Type"); contentType != "application/json" {
 				t.Fatalf("expected JSON content type, got %q", contentType)

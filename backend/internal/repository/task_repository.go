@@ -13,6 +13,12 @@ import (
 var ErrTaskNotFound = errors.New("task not found")
 var ErrTaskNotConfirmed = errors.New("task must be confirmed before publishing")
 
+type TaskListFilter struct {
+	Topic string
+	Level string
+	Sort  string
+}
+
 type TaskRepository struct {
 	db *sql.DB
 }
@@ -144,6 +150,117 @@ func (r *TaskRepository) GetByID(ctx context.Context, id int64) (*model.Task, er
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get task: %w", err)
+	}
+
+	task.Confirmed = confirmed != 0
+	task.Published = published != 0
+	task.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return nil, fmt.Errorf("parse task created_at: %w", err)
+	}
+	task.UpdatedAt, err = time.Parse(time.RFC3339Nano, updatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("parse task updated_at: %w", err)
+	}
+
+	return &task, nil
+}
+
+func (r *TaskRepository) ListPublished(ctx context.Context, filter TaskListFilter) ([]model.Task, error) {
+	query := `
+		SELECT
+			id,
+			title,
+			initial_description,
+			context,
+			need,
+			users,
+			data,
+			constraints,
+			expected_result,
+			success_criteria,
+			contact,
+			interaction_format,
+			topic,
+			rating,
+			readiness_level,
+			confirmed,
+			published,
+			created_at,
+			updated_at
+		FROM tasks
+		WHERE published = 1`
+	args := make([]any, 0, 2)
+
+	if filter.Topic != "" {
+		query += " AND topic = ?"
+		args = append(args, filter.Topic)
+	}
+	if filter.Level != "" {
+		query += " AND readiness_level = ?"
+		args = append(args, filter.Level)
+	}
+	if filter.Sort == "rating" {
+		query += " ORDER BY rating DESC, id DESC"
+	} else {
+		query += " ORDER BY id DESC"
+	}
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list published tasks: %w", err)
+	}
+	defer rows.Close()
+
+	tasks := make([]model.Task, 0)
+	for rows.Next() {
+		task, err := scanTask(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan published task: %w", err)
+		}
+		tasks = append(tasks, *task)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate published tasks: %w", err)
+	}
+
+	return tasks, nil
+}
+
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanTask(scanner rowScanner) (*model.Task, error) {
+	var task model.Task
+	var createdAt string
+	var updatedAt string
+	var confirmed int
+	var published int
+
+	err := scanner.Scan(
+		&task.ID,
+		&task.Title,
+		&task.InitialDescription,
+		&task.Context,
+		&task.Need,
+		&task.Users,
+		&task.Data,
+		&task.Constraints,
+		&task.ExpectedResult,
+		&task.SuccessCriteria,
+		&task.Contact,
+		&task.InteractionFormat,
+		&task.Topic,
+		&task.Rating,
+		&task.ReadinessLevel,
+		&confirmed,
+		&published,
+		&createdAt,
+		&updatedAt,
+	)
+	if err != nil {
+		return nil, err
 	}
 
 	task.Confirmed = confirmed != 0
