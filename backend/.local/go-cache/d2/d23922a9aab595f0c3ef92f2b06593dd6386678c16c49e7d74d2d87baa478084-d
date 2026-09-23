@@ -1,0 +1,7 @@
+./proposal_repository.go
+./task_repository.go
+./team_repository.go
+./proposal_repository_test.go
+./task_list_test.go
+./task_repository_test.go
+./team_repository_test.go

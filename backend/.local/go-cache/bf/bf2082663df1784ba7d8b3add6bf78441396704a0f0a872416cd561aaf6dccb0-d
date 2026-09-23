@@ -1,0 +1,5 @@
+./cors.go
+./proposal_handler.go
+./proposal_status_handler.go
+./router.go
+./task_handler.go
