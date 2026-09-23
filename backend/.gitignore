@@ -1,0 +1,12 @@
+# Binaries
+/bin/
+*.exe
+
+# Test and coverage output
+*.test
+coverage.out
+
+# Local SQLite databases
+*.db
+*.db-shm
+*.db-wal

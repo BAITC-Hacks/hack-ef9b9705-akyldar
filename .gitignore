@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+
+node_modules/
+dist/
+.local/
+
+*.db
+*.db-shm
+*.db-wal
+*.exe
+*.test
+coverage.out
+coverage/
