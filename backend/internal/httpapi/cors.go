@@ -22,6 +22,7 @@ func WithCORS(next http.Handler, allowedOrigin string) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
 			w.Header().Set("Access-Control-Allow-Methods", allowedCORSMethods)
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+			w.Header().Set("Access-Control-Expose-Headers", "X-AI-Mode")
 			w.Header().Add("Vary", "Origin")
 		}
 

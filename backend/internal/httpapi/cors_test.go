@@ -19,6 +19,9 @@ func TestCORSConfiguredOrigin(t *testing.T) {
 	if recorder.Header().Get("Access-Control-Allow-Origin") != "http://frontend.example" {
 		t.Fatalf("expected configured origin, got %q", recorder.Header().Get("Access-Control-Allow-Origin"))
 	}
+	if exposed := recorder.Header().Get("Access-Control-Expose-Headers"); exposed != "X-AI-Mode" {
+		t.Fatalf("expected X-AI-Mode to be exposed, got %q", exposed)
+	}
 }
 
 func TestCORSPreflight(t *testing.T) {

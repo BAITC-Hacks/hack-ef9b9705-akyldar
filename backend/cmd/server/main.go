@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"time"
 
+	ai "hackalem/ai"
+
 	"backend/internal/database"
 	"backend/internal/httpapi"
 	"backend/internal/repository"
@@ -25,6 +27,14 @@ func main() {
 	frontendOrigin := os.Getenv("FRONTEND_ORIGIN")
 	if strings.TrimSpace(frontendOrigin) == "" {
 		frontendOrigin = httpapi.DefaultFrontendOrigin
+	}
+	aiConfig, err := ai.LoadConfigFromEnv()
+	if err != nil {
+		log.Fatalf("load AI configuration: %v", err)
+	}
+	aiService, err := ai.NewService(aiConfig, nil)
+	if err != nil {
+		log.Fatalf("initialize AI service: %v", err)
 	}
 
 	db, err := database.Open(databasePath)
@@ -48,12 +58,16 @@ func main() {
 		log.Printf("demo data seeded")
 	}
 
+	combined := http.NewServeMux()
+	ai.RegisterRoutes(combined, aiService)
+	combined.Handle("/", httpapi.NewRouter(taskRepository, teamRepository, proposalRepository))
+
 	server := &http.Server{
 		Addr:              ":8080",
-		Handler:           httpapi.WithCORS(httpapi.NewRouter(taskRepository, teamRepository, proposalRepository), frontendOrigin),
+		Handler:           httpapi.WithCORS(combined, frontendOrigin),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      10 * time.Second,
+		WriteTimeout:      aiConfig.Timeout + 15*time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
 

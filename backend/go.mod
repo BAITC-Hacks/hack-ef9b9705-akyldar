@@ -4,6 +4,10 @@ go 1.25.0
 
 require modernc.org/sqlite v1.59.0
 
+require hackalem/ai v0.0.0
+
+replace hackalem/ai => ../ai
+
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
