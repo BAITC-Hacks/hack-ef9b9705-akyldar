@@ -1,0 +1,7 @@
+# Binaries
+/bin/
+*.exe
+
+# Test and coverage output
+*.test
+coverage.out
