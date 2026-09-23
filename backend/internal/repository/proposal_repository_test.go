@@ -2,7 +2,9 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"backend/internal/model"
 )
@@ -69,5 +71,88 @@ func TestProposalRepositoryCreateAndList(t *testing.T) {
 	}
 	if empty == nil || len(empty) != 0 {
 		t.Fatalf("expected non-nil empty proposal list, got %+v", empty)
+	}
+}
+
+func TestProposalRepositoryUpdateStatusTransitions(t *testing.T) {
+	taskRepository, teamRepository, proposalRepository := newTestRepositories(t)
+	task := &model.Task{InitialDescription: "Task"}
+	if err := taskRepository.Create(context.Background(), task); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	team := &model.Team{Name: "Team"}
+	if err := teamRepository.CreateTeam(context.Background(), team); err != nil {
+		t.Fatalf("create team: %v", err)
+	}
+
+	createProposal := func(idea string) *model.Proposal {
+		t.Helper()
+		proposal := &model.Proposal{
+			TaskID:       task.ID,
+			TeamID:       team.ID,
+			Idea:         idea,
+			Plan:         "Plan",
+			Deadline:     "2026-10-15",
+			PrototypeURL: "https://example.com",
+		}
+		if err := proposalRepository.Create(context.Background(), proposal); err != nil {
+			t.Fatalf("create proposal: %v", err)
+		}
+		return proposal
+	}
+
+	accepted := createProposal("Accepted proposal")
+	rejected := createProposal("Rejected proposal")
+	originalCreatedAt := accepted.CreatedAt
+	originalIdea := accepted.Idea
+	originalPlan := accepted.Plan
+	originalDeadline := accepted.Deadline
+	originalURL := accepted.PrototypeURL
+	time.Sleep(time.Millisecond)
+
+	updated, err := proposalRepository.UpdateStatus(context.Background(), accepted.ID, "accepted")
+	if err != nil {
+		t.Fatalf("pending to accepted: %v", err)
+	}
+	if updated.Status != "accepted" {
+		t.Fatalf("expected accepted status, got %q", updated.Status)
+	}
+	if !updated.CreatedAt.Equal(originalCreatedAt) || !updated.UpdatedAt.After(accepted.UpdatedAt) {
+		t.Fatalf("unexpected timestamps after acceptance: %+v", updated)
+	}
+	if updated.Idea != originalIdea || updated.Plan != originalPlan || updated.Deadline != originalDeadline || updated.PrototypeURL != originalURL || updated.TaskID != task.ID || updated.TeamID != team.ID {
+		t.Fatalf("non-status fields changed: %+v", updated)
+	}
+
+	repeatedAccepted, err := proposalRepository.UpdateStatus(context.Background(), accepted.ID, "accepted")
+	if err != nil || repeatedAccepted.Status != "accepted" {
+		t.Fatalf("repeated accepted update failed: proposal=%+v err=%v", repeatedAccepted, err)
+	}
+
+	updated, err = proposalRepository.UpdateStatus(context.Background(), accepted.ID, "rejected")
+	if err != nil || updated.Status != "rejected" {
+		t.Fatalf("accepted to rejected failed: proposal=%+v err=%v", updated, err)
+	}
+	updated, err = proposalRepository.UpdateStatus(context.Background(), accepted.ID, "accepted")
+	if err != nil || updated.Status != "accepted" {
+		t.Fatalf("rejected to accepted failed: proposal=%+v err=%v", updated, err)
+	}
+
+	updated, err = proposalRepository.UpdateStatus(context.Background(), rejected.ID, "rejected")
+	if err != nil || updated.Status != "rejected" {
+		t.Fatalf("pending to rejected failed: proposal=%+v err=%v", updated, err)
+	}
+	repeatedRejected, err := proposalRepository.UpdateStatus(context.Background(), rejected.ID, "rejected")
+	if err != nil || repeatedRejected.Status != "rejected" {
+		t.Fatalf("repeated rejected update failed: proposal=%+v err=%v", repeatedRejected, err)
+	}
+}
+
+func TestProposalRepositoryUpdateStatusNotFound(t *testing.T) {
+	_, _, proposalRepository := newTestRepositories(t)
+
+	_, err := proposalRepository.UpdateStatus(context.Background(), 999, "accepted")
+	if !errors.Is(err, ErrProposalNotFound) {
+		t.Fatalf("expected ErrProposalNotFound, got %v", err)
 	}
 }

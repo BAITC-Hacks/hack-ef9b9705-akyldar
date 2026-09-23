@@ -15,6 +15,9 @@ func NewRouter(taskRepository *repository.TaskRepository, teamRepository *reposi
 	mux.HandleFunc("/api/tasks", tasks.handleCollection)
 	mux.HandleFunc("/api/tasks/", tasks.handleByID)
 
+	proposalStatus := newProposalStatusHandler(proposalRepository)
+	mux.HandleFunc("/api/proposals/", proposalStatus.handle)
+
 	return mux
 }
 

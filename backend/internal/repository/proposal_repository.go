@@ -10,6 +10,8 @@ import (
 	"backend/internal/model"
 )
 
+var ErrProposalNotFound = errors.New("proposal not found")
+
 type ProposalRepository struct {
 	db *sql.DB
 }
@@ -99,6 +101,62 @@ func (r *ProposalRepository) ListByTaskID(ctx context.Context, taskID int64) ([]
 	}
 
 	return proposals, nil
+}
+
+func (r *ProposalRepository) UpdateStatus(ctx context.Context, id int64, status string) (*model.Proposal, error) {
+	now := time.Now().UTC()
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE proposals
+		SET status = ?, updated_at = ?
+		WHERE id = ?
+	`, status, now.Format(time.RFC3339Nano), id)
+	if err != nil {
+		return nil, fmt.Errorf("update proposal status: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("get updated proposal count: %w", err)
+	}
+	if rowsAffected == 0 {
+		return nil, fmt.Errorf("%w: %d", ErrProposalNotFound, id)
+	}
+
+	proposal, err := r.getByID(ctx, id)
+	if errors.Is(err, ErrProposalNotFound) {
+		return nil, fmt.Errorf("%w: %d", ErrProposalNotFound, id)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get updated proposal: %w", err)
+	}
+
+	return proposal, nil
+}
+
+func (r *ProposalRepository) getByID(ctx context.Context, id int64) (*model.Proposal, error) {
+	proposal, err := scanProposal(r.db.QueryRowContext(ctx, `
+		SELECT
+			id,
+			task_id,
+			team_id,
+			idea,
+			plan,
+			deadline,
+			prototype_url,
+			status,
+			created_at,
+			updated_at
+		FROM proposals
+		WHERE id = ?
+	`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("%w: %d", ErrProposalNotFound, id)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return proposal, nil
 }
 
 type proposalScanner interface {
