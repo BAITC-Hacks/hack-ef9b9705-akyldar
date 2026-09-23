@@ -3,11 +3,17 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
+
+	"backend/internal/repository"
 )
 
-func NewRouter() http.Handler {
+func NewRouter(taskRepository *repository.TaskRepository) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", healthHandler)
+
+	tasks := newTaskHandler(taskRepository)
+	mux.HandleFunc("/api/tasks", tasks.handleCollection)
+	mux.HandleFunc("/api/tasks/", tasks.handleByID)
 
 	return mux
 }
@@ -15,7 +21,7 @@ func NewRouter() http.Handler {
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 

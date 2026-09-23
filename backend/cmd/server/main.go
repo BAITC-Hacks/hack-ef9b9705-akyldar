@@ -8,6 +8,7 @@ import (
 
 	"backend/internal/database"
 	"backend/internal/httpapi"
+	"backend/internal/repository"
 )
 
 func main() {
@@ -22,9 +23,15 @@ func main() {
 	}
 	defer db.Close()
 
+	if err := database.InitSchema(db); err != nil {
+		log.Fatalf("initialize database schema: %v", err)
+	}
+
+	taskRepository := repository.NewTaskRepository(db)
+
 	server := &http.Server{
 		Addr:              ":8080",
-		Handler:           httpapi.NewRouter(),
+		Handler:           httpapi.NewRouter(taskRepository),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
