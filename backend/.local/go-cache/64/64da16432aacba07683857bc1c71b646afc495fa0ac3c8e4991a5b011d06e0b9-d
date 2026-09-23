@@ -1,6 +1,0 @@
-./decommit_windows.go
-./memory.go
-./memory64.go
-./mmap_windows.go
-./nocounters.go
-./trace_disabled.go
