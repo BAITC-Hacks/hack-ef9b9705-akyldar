@@ -158,3 +158,56 @@ func (r *TaskRepository) GetByID(ctx context.Context, id int64) (*model.Task, er
 
 	return &task, nil
 }
+
+func (r *TaskRepository) Update(ctx context.Context, task *model.Task) error {
+	if task == nil {
+		return errors.New("task is nil")
+	}
+
+	now := time.Now().UTC()
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE tasks
+		SET
+			title = ?,
+			context = ?,
+			need = ?,
+			users = ?,
+			data = ?,
+			constraints = ?,
+			expected_result = ?,
+			success_criteria = ?,
+			contact = ?,
+			interaction_format = ?,
+			topic = ?,
+			updated_at = ?
+		WHERE id = ?
+	`,
+		task.Title,
+		task.Context,
+		task.Need,
+		task.Users,
+		task.Data,
+		task.Constraints,
+		task.ExpectedResult,
+		task.SuccessCriteria,
+		task.Contact,
+		task.InteractionFormat,
+		task.Topic,
+		now.Format(time.RFC3339Nano),
+		task.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("update task: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("get updated task count: %w", err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("%w: %d", ErrTaskNotFound, task.ID)
+	}
+
+	task.UpdatedAt = now
+	return nil
+}

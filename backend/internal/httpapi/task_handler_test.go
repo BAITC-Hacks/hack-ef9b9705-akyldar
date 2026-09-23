@@ -201,3 +201,96 @@ func TestGetTaskByIDErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestUpdateTask(t *testing.T) {
+	router := newTestRouter(t)
+
+	createRequest := httptest.NewRequest(http.MethodPost, "/api/tasks", bytes.NewBufferString(`{"initial_description":"Original draft description","topic":"original-topic"}`))
+	createRecorder := httptest.NewRecorder()
+	router.ServeHTTP(createRecorder, createRequest)
+	if createRecorder.Code != http.StatusCreated {
+		t.Fatalf("expected create status %d, got %d", http.StatusCreated, createRecorder.Code)
+	}
+
+	var created model.Task
+	if err := json.NewDecoder(createRecorder.Body).Decode(&created); err != nil {
+		t.Fatalf("decode created task: %v", err)
+	}
+
+	updateBody := `{
+		"title":"Warehouse automation system",
+		"context":"Warehouse operations are tracked manually.",
+		"need":"Reduce manual work and inventory errors.",
+		"users":"Warehouse employees",
+		"data":"Existing inventory CSV files",
+		"constraints":"Prototype must run locally",
+		"expected_result":"Working inventory management prototype",
+		"success_criteria":"Reduce manual inventory operations",
+		"contact":"business@example.com",
+		"interaction_format":"Weekly consultation",
+		"topic":"logistics"
+	}`
+	updateRequest := httptest.NewRequest(http.MethodPut, "/api/tasks/"+strconv.FormatInt(created.ID, 10), bytes.NewBufferString(updateBody))
+	updateRecorder := httptest.NewRecorder()
+	router.ServeHTTP(updateRecorder, updateRequest)
+
+	if updateRecorder.Code != http.StatusOK {
+		t.Fatalf("expected update status %d, got %d", http.StatusOK, updateRecorder.Code)
+	}
+
+	var updated model.Task
+	if err := json.NewDecoder(updateRecorder.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode updated task: %v", err)
+	}
+	if updated.Title != "Warehouse automation system" || updated.Topic != "logistics" {
+		t.Fatalf("updated values missing from response: %+v", updated)
+	}
+	if updated.InitialDescription != "Original draft description" {
+		t.Fatalf("expected initial description to remain unchanged, got %q", updated.InitialDescription)
+	}
+
+	getRequest := httptest.NewRequest(http.MethodGet, "/api/tasks/"+strconv.FormatInt(created.ID, 10), nil)
+	getRecorder := httptest.NewRecorder()
+	router.ServeHTTP(getRecorder, getRequest)
+	if getRecorder.Code != http.StatusOK {
+		t.Fatalf("expected get status %d, got %d", http.StatusOK, getRecorder.Code)
+	}
+
+	var fetched model.Task
+	if err := json.NewDecoder(getRecorder.Body).Decode(&fetched); err != nil {
+		t.Fatalf("decode fetched task: %v", err)
+	}
+	if fetched.Title != updated.Title || fetched.Context != updated.Context || fetched.Topic != updated.Topic {
+		t.Fatalf("GET did not return updated values: %+v", fetched)
+	}
+}
+
+func TestUpdateTaskErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		path       string
+		body       string
+		expectCode int
+	}{
+		{name: "invalid ID", path: "/api/tasks/invalid", body: `{}`, expectCode: http.StatusBadRequest},
+		{name: "missing task", path: "/api/tasks/999", body: `{}`, expectCode: http.StatusNotFound},
+		{name: "malformed JSON", path: "/api/tasks/1", body: `{"title":`, expectCode: http.StatusBadRequest},
+		{name: "unknown rating field", path: "/api/tasks/1", body: `{"title":"Example","rating":100}`, expectCode: http.StatusBadRequest},
+		{name: "initial description field", path: "/api/tasks/1", body: `{"initial_description":"Changed"}`, expectCode: http.StatusBadRequest},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPut, test.path, bytes.NewBufferString(test.body))
+			recorder := httptest.NewRecorder()
+			newTestRouter(t).ServeHTTP(recorder, req)
+
+			if recorder.Code != test.expectCode {
+				t.Fatalf("expected status %d, got %d", test.expectCode, recorder.Code)
+			}
+			if contentType := recorder.Header().Get("Content-Type"); contentType != "application/json" {
+				t.Fatalf("expected JSON content type, got %q", contentType)
+			}
+		})
+	}
+}
