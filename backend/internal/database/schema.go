@@ -28,9 +28,45 @@ CREATE TABLE IF NOT EXISTS tasks (
 	updated_at TEXT NOT NULL
 );`
 
+const createTeamsTable = `
+CREATE TABLE IF NOT EXISTS teams (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	name TEXT NOT NULL DEFAULT '',
+	interests TEXT NOT NULL DEFAULT '[]',
+	skills TEXT NOT NULL DEFAULT '[]',
+	technologies TEXT NOT NULL DEFAULT '[]'
+);`
+
+const createProposalsTable = `
+CREATE TABLE IF NOT EXISTS proposals (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	task_id INTEGER NOT NULL,
+	team_id INTEGER NOT NULL,
+	idea TEXT NOT NULL DEFAULT '',
+	plan TEXT NOT NULL DEFAULT '',
+	deadline TEXT NOT NULL DEFAULT '',
+	prototype_url TEXT NOT NULL DEFAULT '',
+	status TEXT NOT NULL DEFAULT 'pending',
+	created_at TEXT NOT NULL,
+	updated_at TEXT NOT NULL,
+	FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+	FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE RESTRICT
+);`
+
 func InitSchema(db *sql.DB) error {
-	if _, err := db.Exec(createTasksTable); err != nil {
-		return fmt.Errorf("initialize database schema: %w", err)
+	statements := []struct {
+		name string
+		sql  string
+	}{
+		{name: "tasks", sql: createTasksTable},
+		{name: "teams", sql: createTeamsTable},
+		{name: "proposals", sql: createProposalsTable},
+	}
+
+	for _, statement := range statements {
+		if _, err := db.Exec(statement.sql); err != nil {
+			return fmt.Errorf("initialize %s table: %w", statement.name, err)
+		}
 	}
 
 	return nil

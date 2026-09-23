@@ -28,7 +28,7 @@ func newTestRouter(t *testing.T) http.Handler {
 		t.Fatalf("initialize test schema: %v", err)
 	}
 
-	return NewRouter(repository.NewTaskRepository(db))
+	return NewRouter(repository.NewTaskRepository(db), repository.NewTeamRepository(db), repository.NewProposalRepository(db))
 }
 
 func newCatalogTestRouter(t *testing.T) (http.Handler, *repository.TaskRepository) {
@@ -45,7 +45,61 @@ func newCatalogTestRouter(t *testing.T) (http.Handler, *repository.TaskRepositor
 	}
 
 	repo := repository.NewTaskRepository(db)
-	return NewRouter(repo), repo
+	return NewRouter(repo, repository.NewTeamRepository(db), repository.NewProposalRepository(db)), repo
+}
+
+func newProposalTestRouter(t *testing.T) (http.Handler, *repository.TeamRepository) {
+	t.Helper()
+
+	db, err := database.Open(filepath.Join(t.TempDir(), "proposals.db"))
+	if err != nil {
+		t.Fatalf("open proposal test database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	if err := database.InitSchema(db); err != nil {
+		t.Fatalf("initialize proposal test schema: %v", err)
+	}
+
+	taskRepository := repository.NewTaskRepository(db)
+	teamRepository := repository.NewTeamRepository(db)
+	proposalRepository := repository.NewProposalRepository(db)
+	return NewRouter(taskRepository, teamRepository, proposalRepository), teamRepository
+}
+
+func createHTTPTask(t *testing.T, router http.Handler, description string) model.Task {
+	t.Helper()
+
+	request := httptest.NewRequest(http.MethodPost, "/api/tasks", bytes.NewBufferString(`{"initial_description":"`+description+`"}`))
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("expected task creation status %d, got %d", http.StatusCreated, recorder.Code)
+	}
+
+	var task model.Task
+	if err := json.NewDecoder(recorder.Body).Decode(&task); err != nil {
+		t.Fatalf("decode created task: %v", err)
+	}
+	return task
+}
+
+func publishHTTPTask(t *testing.T, router http.Handler, taskID int64) {
+	t.Helper()
+	path := "/api/tasks/" + strconv.FormatInt(taskID, 10)
+	confirmRequest := httptest.NewRequest(http.MethodPost, path+"/confirm", nil)
+	confirmRecorder := httptest.NewRecorder()
+	router.ServeHTTP(confirmRecorder, confirmRequest)
+	if confirmRecorder.Code != http.StatusOK {
+		t.Fatalf("expected confirm status %d, got %d", http.StatusOK, confirmRecorder.Code)
+	}
+
+	publishRequest := httptest.NewRequest(http.MethodPost, path+"/publish", nil)
+	publishRecorder := httptest.NewRecorder()
+	router.ServeHTTP(publishRecorder, publishRequest)
+	if publishRecorder.Code != http.StatusOK {
+		t.Fatalf("expected publish status %d, got %d", http.StatusOK, publishRecorder.Code)
+	}
 }
 
 func seedPublishedCatalogTask(t *testing.T, repo *repository.TaskRepository, task *model.Task) {
@@ -149,7 +203,7 @@ func TestHealthMethodNotAllowedReturnsJSON(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/health", nil)
 	recorder := httptest.NewRecorder()
 
-	NewRouter(nil).ServeHTTP(recorder, req)
+	NewRouter(nil, nil, nil).ServeHTTP(recorder, req)
 
 	if recorder.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected status %d, got %d", http.StatusMethodNotAllowed, recorder.Code)
@@ -186,7 +240,7 @@ func TestGetTaskByID(t *testing.T) {
 		t.Fatalf("create task: %v", err)
 	}
 
-	router := NewRouter(repo)
+	router := NewRouter(repo, repository.NewTeamRepository(db), repository.NewProposalRepository(db))
 	req := httptest.NewRequest(http.MethodGet, "/api/tasks/"+strconv.FormatInt(task.ID, 10), nil)
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, req)
@@ -747,6 +801,164 @@ func TestListTasksCatalogValidation(t *testing.T) {
 
 			if recorder.Code != http.StatusBadRequest {
 				t.Fatalf("expected status %d, got %d", http.StatusBadRequest, recorder.Code)
+			}
+			if contentType := recorder.Header().Get("Content-Type"); contentType != "application/json" {
+				t.Fatalf("expected JSON content type, got %q", contentType)
+			}
+		})
+	}
+}
+
+func TestProposalEndpoints(t *testing.T) {
+	router, teamRepository := newProposalTestRouter(t)
+	teamOne := &model.Team{Name: "Team One", Interests: []string{"logistics"}}
+	teamTwo := &model.Team{Name: "Team Two", Skills: []string{"backend"}}
+	if err := teamRepository.CreateTeam(t.Context(), teamOne); err != nil {
+		t.Fatalf("create first team: %v", err)
+	}
+	if err := teamRepository.CreateTeam(t.Context(), teamTwo); err != nil {
+		t.Fatalf("create second team: %v", err)
+	}
+
+	task := createHTTPTask(t, router, "Published business task")
+	publishHTTPTask(t, router, task.ID)
+	proposalBody := func(teamID int64, idea string) string {
+		return `{"team_id":` + strconv.FormatInt(teamID, 10) + `,"idea":"` + idea + `","plan":"Analyze data and build a prototype","deadline":"2026-10-15","prototype_url":"https://example.com/prototype"}`
+	}
+
+	createRequest := httptest.NewRequest(http.MethodPost, "/api/tasks/"+strconv.FormatInt(task.ID, 10)+"/proposals", bytes.NewBufferString(proposalBody(teamOne.ID, "Build a lightweight inventory dashboard")))
+	createRecorder := httptest.NewRecorder()
+	router.ServeHTTP(createRecorder, createRequest)
+	if createRecorder.Code != http.StatusCreated {
+		t.Fatalf("expected proposal creation status %d, got %d", http.StatusCreated, createRecorder.Code)
+	}
+
+	var first model.Proposal
+	if err := json.NewDecoder(createRecorder.Body).Decode(&first); err != nil {
+		t.Fatalf("decode created proposal: %v", err)
+	}
+	if first.ID <= 0 || first.TaskID != task.ID || first.TeamID != teamOne.ID || first.Status != "pending" {
+		t.Fatalf("unexpected created proposal: %+v", first)
+	}
+
+	secondRequest := httptest.NewRequest(http.MethodPost, "/api/tasks/"+strconv.FormatInt(task.ID, 10)+"/proposals", bytes.NewBufferString(proposalBody(teamTwo.ID, "Build a reporting prototype")))
+	secondRecorder := httptest.NewRecorder()
+	router.ServeHTTP(secondRecorder, secondRequest)
+	if secondRecorder.Code != http.StatusCreated {
+		t.Fatalf("expected second proposal creation status %d, got %d", http.StatusCreated, secondRecorder.Code)
+	}
+
+	listRequest := httptest.NewRequest(http.MethodGet, "/api/tasks/"+strconv.FormatInt(task.ID, 10)+"/proposals", nil)
+	listRecorder := httptest.NewRecorder()
+	router.ServeHTTP(listRecorder, listRequest)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("expected proposal list status %d, got %d", http.StatusOK, listRecorder.Code)
+	}
+
+	var proposals []model.Proposal
+	if err := json.NewDecoder(listRecorder.Body).Decode(&proposals); err != nil {
+		t.Fatalf("decode proposal list: %v", err)
+	}
+	if len(proposals) != 2 || proposals[0].ID <= proposals[1].ID {
+		t.Fatalf("expected two newest-first proposals, got %+v", proposals)
+	}
+
+	emptyTask := createHTTPTask(t, router, "Published task with no proposals")
+	publishHTTPTask(t, router, emptyTask.ID)
+	emptyRequest := httptest.NewRequest(http.MethodGet, "/api/tasks/"+strconv.FormatInt(emptyTask.ID, 10)+"/proposals", nil)
+	emptyRecorder := httptest.NewRecorder()
+	router.ServeHTTP(emptyRecorder, emptyRequest)
+	if emptyRecorder.Code != http.StatusOK {
+		t.Fatalf("expected empty proposal list status %d, got %d", http.StatusOK, emptyRecorder.Code)
+	}
+	var empty []model.Proposal
+	if err := json.NewDecoder(emptyRecorder.Body).Decode(&empty); err != nil {
+		t.Fatalf("decode empty proposal list: %v", err)
+	}
+	if empty == nil || len(empty) != 0 {
+		t.Fatalf("expected empty proposal array, got %+v", empty)
+	}
+}
+
+func TestProposalCreationRules(t *testing.T) {
+	router, teamRepository := newProposalTestRouter(t)
+	team := &model.Team{Name: "Proposal Team"}
+	if err := teamRepository.CreateTeam(t.Context(), team); err != nil {
+		t.Fatalf("create team: %v", err)
+	}
+
+	unpublished := createHTTPTask(t, router, "Unpublished task")
+	validBody := `{"team_id":` + strconv.FormatInt(team.ID, 10) + `,"idea":"Idea","plan":"Plan","deadline":"2026-10-15","prototype_url":"https://example.com"}`
+	unpublishedRequest := httptest.NewRequest(http.MethodPost, "/api/tasks/"+strconv.FormatInt(unpublished.ID, 10)+"/proposals", bytes.NewBufferString(validBody))
+	unpublishedRecorder := httptest.NewRecorder()
+	router.ServeHTTP(unpublishedRecorder, unpublishedRequest)
+	if unpublishedRecorder.Code != http.StatusConflict {
+		t.Fatalf("expected unpublished task status %d, got %d", http.StatusConflict, unpublishedRecorder.Code)
+	}
+
+	published := createHTTPTask(t, router, "Published task")
+	publishHTTPTask(t, router, published.ID)
+	nonexistentTeamBody := `{"team_id":999,"idea":"Idea","plan":"Plan","deadline":"2026-10-15","prototype_url":"https://example.com"}`
+	nonexistentTeamRequest := httptest.NewRequest(http.MethodPost, "/api/tasks/"+strconv.FormatInt(published.ID, 10)+"/proposals", bytes.NewBufferString(nonexistentTeamBody))
+	nonexistentTeamRecorder := httptest.NewRecorder()
+	router.ServeHTTP(nonexistentTeamRecorder, nonexistentTeamRequest)
+	if nonexistentTeamRecorder.Code != http.StatusNotFound {
+		t.Fatalf("expected nonexistent team status %d, got %d", http.StatusNotFound, nonexistentTeamRecorder.Code)
+	}
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "missing team", body: `{"idea":"Idea","plan":"Plan","deadline":"2026-10-15","prototype_url":"https://example.com"}`},
+		{name: "empty idea", body: `{"team_id":1,"idea":"   ","plan":"Plan","deadline":"2026-10-15","prototype_url":"https://example.com"}`},
+		{name: "empty plan", body: `{"team_id":1,"idea":"Idea","plan":"   ","deadline":"2026-10-15","prototype_url":"https://example.com"}`},
+		{name: "empty deadline", body: `{"team_id":1,"idea":"Idea","plan":"Plan","deadline":"   ","prototype_url":"https://example.com"}`},
+		{name: "empty prototype URL", body: `{"team_id":1,"idea":"Idea","plan":"Plan","deadline":"2026-10-15","prototype_url":"   "}`},
+		{name: "unknown status", body: `{"team_id":1,"idea":"Idea","plan":"Plan","deadline":"2026-10-15","prototype_url":"https://example.com","status":"accepted"}`},
+		{name: "malformed JSON", body: `{"team_id":1,"idea":`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/api/tasks/"+strconv.FormatInt(published.ID, 10)+"/proposals", bytes.NewBufferString(test.body))
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("expected status %d, got %d", http.StatusBadRequest, recorder.Code)
+			}
+			if contentType := recorder.Header().Get("Content-Type"); contentType != "application/json" {
+				t.Fatalf("expected JSON content type, got %q", contentType)
+			}
+		})
+	}
+}
+
+func TestProposalEndpointErrors(t *testing.T) {
+	router, teamRepository := newProposalTestRouter(t)
+	team := &model.Team{Name: "Proposal Team"}
+	if err := teamRepository.CreateTeam(t.Context(), team); err != nil {
+		t.Fatalf("create team: %v", err)
+	}
+
+	tests := []struct {
+		name       string
+		method     string
+		path       string
+		expectCode int
+	}{
+		{name: "invalid task ID on create", method: http.MethodPost, path: "/api/tasks/invalid/proposals", expectCode: http.StatusBadRequest},
+		{name: "missing task on create", method: http.MethodPost, path: "/api/tasks/999/proposals", expectCode: http.StatusNotFound},
+		{name: "invalid task ID on list", method: http.MethodGet, path: "/api/tasks/0/proposals", expectCode: http.StatusBadRequest},
+		{name: "missing task on list", method: http.MethodGet, path: "/api/tasks/999/proposals", expectCode: http.StatusNotFound},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(test.method, test.path, bytes.NewBufferString(`{"team_id":`+strconv.FormatInt(team.ID, 10)+`,"idea":"Idea","plan":"Plan","deadline":"2026-10-15","prototype_url":"https://example.com"}`))
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, request)
+			if recorder.Code != test.expectCode {
+				t.Fatalf("expected status %d, got %d", test.expectCode, recorder.Code)
 			}
 			if contentType := recorder.Header().Get("Content-Type"); contentType != "application/json" {
 				t.Fatalf("expected JSON content type, got %q", contentType)

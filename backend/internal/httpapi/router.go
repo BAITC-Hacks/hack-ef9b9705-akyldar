@@ -7,11 +7,11 @@ import (
 	"backend/internal/repository"
 )
 
-func NewRouter(taskRepository *repository.TaskRepository) http.Handler {
+func NewRouter(taskRepository *repository.TaskRepository, teamRepository *repository.TeamRepository, proposalRepository *repository.ProposalRepository) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", healthHandler)
 
-	tasks := newTaskHandler(taskRepository)
+	tasks := newTaskHandler(taskRepository, teamRepository, proposalRepository)
 	mux.HandleFunc("/api/tasks", tasks.handleCollection)
 	mux.HandleFunc("/api/tasks/", tasks.handleByID)
 

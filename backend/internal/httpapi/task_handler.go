@@ -14,11 +14,17 @@ import (
 )
 
 type taskHandler struct {
-	repository *repository.TaskRepository
+	repository         *repository.TaskRepository
+	teamRepository     *repository.TeamRepository
+	proposalRepository *repository.ProposalRepository
 }
 
-func newTaskHandler(taskRepository *repository.TaskRepository) *taskHandler {
-	return &taskHandler{repository: taskRepository}
+func newTaskHandler(taskRepository *repository.TaskRepository, teamRepository *repository.TeamRepository, proposalRepository *repository.ProposalRepository) *taskHandler {
+	return &taskHandler{
+		repository:         taskRepository,
+		teamRepository:     teamRepository,
+		proposalRepository: proposalRepository,
+	}
 }
 
 type createTaskRequest struct {
@@ -113,6 +119,27 @@ func validReadinessLevel(level string) bool {
 }
 
 func (h *taskHandler) handleByID(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(r.URL.Path, "/proposals") {
+		if r.Method != http.MethodGet && r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+
+		id, err := parseTaskActionID(r.URL.Path, "/proposals")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid task id")
+			return
+		}
+
+		if r.Method == http.MethodPost {
+			h.createProposalByTaskID(w, r, id)
+		} else {
+			h.listProposalsByTaskID(w, r, id)
+		}
+		return
+	}
+
 	if strings.HasSuffix(r.URL.Path, "/rating") {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)

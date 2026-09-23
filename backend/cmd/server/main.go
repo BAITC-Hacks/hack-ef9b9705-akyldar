@@ -28,10 +28,12 @@ func main() {
 	}
 
 	taskRepository := repository.NewTaskRepository(db)
+	teamRepository := repository.NewTeamRepository(db)
+	proposalRepository := repository.NewProposalRepository(db)
 
 	server := &http.Server{
 		Addr:              ":8080",
-		Handler:           httpapi.NewRouter(taskRepository),
+		Handler:           httpapi.NewRouter(taskRepository, teamRepository, proposalRepository),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
