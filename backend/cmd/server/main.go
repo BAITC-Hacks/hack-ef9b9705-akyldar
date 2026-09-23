@@ -3,12 +3,25 @@ package main
 import (
 	"log"
 	"net/http"
+	"os"
 	"time"
 
+	"backend/internal/database"
 	"backend/internal/httpapi"
 )
 
 func main() {
+	databasePath := os.Getenv("DATABASE_PATH")
+	if databasePath == "" {
+		databasePath = "./data/app.db"
+	}
+
+	db, err := database.Open(databasePath)
+	if err != nil {
+		log.Fatalf("initialize database: %v", err)
+	}
+	defer db.Close()
+
 	server := &http.Server{
 		Addr:              ":8080",
 		Handler:           httpapi.NewRouter(),
